@@ -7,6 +7,8 @@ const cors = require("cors")
 const jwt = require("jsonwebtoken")
 const fs = require("fs")
 const { Timestamp } = require("firebase-admin/firestore")
+const Busboy = require("busboy")
+const path = require("path")
 
 // ---------------------------------------------------------
 // Firebase Admin
@@ -23,7 +25,8 @@ const bucket = admin.storage().bucket()
 setGlobalOptions({
   region: "asia-southeast2",
   memory: "256MiB",
-  timeoutSeconds: 30,
+  consumeRawBody: true,
+  timeoutSeconds: 60,
 })
 
 // ---------------------------------------------------------
@@ -161,80 +164,88 @@ app.post("/Login/pilihpaket", async (req, res) => {
 // ---------------------------------------------------------
 // UPLOAD BUKTI BAYAR
 // ---------------------------------------------------------
-app.put("/Login/uploadbukti", async (req, res) => {
-  try {
-    // Get metadata from query params
-    const idPerusahaan = req.query.idperusahaan
-    const namaPerusahaan = req.query.namaPerusahaan
+app.put("/Login/uploadbukti", (req, res) => {
+  // Panggil Busboy dengan headers dari request
+  const busboy = Busboy({ headers: req.headers })
 
-    // Validasi required params
-    if (!idPerusahaan) {
-      return res.status(400).json({ message: "idperusahaan wajib diisi" })
-    }
-    if (!namaPerusahaan) {
-      return res.status(400).json({ message: "namaPerusahaan wajib diisi" })
-    }
+  const fields = {}
+  let fileBuffer = null
+  let fileMime = null
+  let fileName = null // Menangkap nama file asli
 
-    // Get file from raw body
-    const fileBuffer = req.body
+  // Ambil field text
+  busboy.on("field", (fieldname, val) => {
+    fields[fieldname] = val
+  })
 
-    // Validate file exists and size
-    if (!fileBuffer || fileBuffer.length === 0) {
-      return res.status(400).json({ message: "File wajib diupload" })
-    }
+  // Ambil file
+  busboy.on("file", (fieldname, file, info) => {
+    const { mimeType, filename } = info
+    fileMime = mimeType
+    fileName = filename
+    const chunks = []
 
-    // Get content type from header
-    const contentType = req.headers["content-type"] || "image/jpeg"
-
-    // Validate is image
-    if (!contentType.startsWith("image/")) {
-      return res.status(400).json({ message: "Hanya file gambar yang diperbolehkan" })
-    }
-
-    // Generate unique filename
-    const timestamp = Date.now()
-    const fileExtension = contentType.split("/")[1] || "jpg"
-    const filename = `bukti-bayar/${idPerusahaan}_${timestamp}.${fileExtension}`
-
-    // Upload to Firebase Storage
-    const firebaseFile = bucket.file(filename)
-    await firebaseFile.save(fileBuffer, {
-      metadata: {
-        contentType: contentType,
-      },
+    file.on("data", (data) => chunks.push(data))
+    file.on("end", () => {
+      fileBuffer = Buffer.concat(chunks)
     })
+  })
 
-    // Generate download URL
-    const downloadURL = `https://storage.googleapis.com/${bucket.name}/${filename}`
+  // TANGANI ERROR BUSBOY DI SINI (Solusi utama error 500/ECONNRESET)
+  busboy.on("error", (err) => {
+    console.error("Busboy Error:", err)
+    return res.status(500).json({ message: "Gagal mengurai form data", error: err.message })
+  })
 
-    // Simpan ke Firestore
-    await db.collection("bukti_bayar").doc(idPerusahaan).set(
-      {
-        idPerusahaan,
-        namaPerusahaan,
-        fotoURL: downloadURL,
-        filename,
-        uploadedAt: Timestamp.now(),
-        status: "pending",
-      },
-      { merge: true },
-    )
+  busboy.on("finish", async () => {
+    try {
+      const NamaPerusahaan = fields.NamaPerusahaan
+      const IDPerusahaan = fields.IDPerusahaan
 
-    return res.status(200).json({
-      message: "Bukti bayar berhasil diupload",
-      data: {
-        idPerusahaan,
-        namaPerusahaan,
-        fotoURL: downloadURL,
-      },
-    })
-  } catch (e) {
-    console.error("Upload bukti bayar error:", e)
-    return res.status(500).json({
-      message: "Gagal mengupload bukti bayar",
-      error: e.message,
-    })
-  }
+      // Validasi data
+      if (!NamaPerusahaan) return res.status(400).json({ message: "NamaPerusahaan wajib diisi" })
+      if (!IDPerusahaan) return res.status(400).json({ message: "IDPerusahaan wajib diisi" })
+      if (!fileBuffer) return res.status(400).json({ message: "Foto wajib diupload" })
+      if (!fileMime.startsWith("image/")) return res.status(400).json({ message: "Harus file gambar" })
+
+      const timestamp = Date.now()
+      // Gunakan path.extname untuk ekstensi yang lebih bersih
+      const ext = path.extname(fileName || "").toLowerCase() || `.${fileMime.split("/")[1]}`
+      const filePath = `bukti-bayar/${IDPerusahaan}_${timestamp}${ext}`
+
+      const fileStorage = bucket.file(filePath)
+      await fileStorage.save(fileBuffer, {
+        metadata: { contentType: fileMime },
+        public: true, // Set file menjadi public saat diunggah
+      })
+      // Tidak perlu memanggil makePublic() lagi jika sudah diatur di opsi save()
+      const url = fileStorage.publicUrl()
+
+      await db.collection("bukti_bayar").doc(IDPerusahaan).set(
+        {
+          idPerusahaan: IDPerusahaan,
+          namaPerusahaan: NamaPerusahaan,
+          fotoURL: url,
+          filename: filePath,
+          uploadedAt: Timestamp.now(),
+          status: "pending",
+        },
+        { merge: true },
+      )
+
+      return res.status(200).json({
+        message: "Bukti bayar berhasil diupload",
+        fotoURL: url,
+      })
+    } catch (err) {
+      console.error("Upload process error:", err)
+      // Jika terjadi error di dalam async finish, kirim response error 500
+      return res.status(500).json({ message: "Gagal upload", error: err.message })
+    }
+  })
+
+  // PENTING: Pipe request mentah ke Busboy
+  busboy.end(req.rawBody)
 })
 
 // ---------------------------------------------------------
