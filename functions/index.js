@@ -33,7 +33,7 @@ setGlobalOptions({
 // ENV / Config
 // ---------------------------------------------------------
 const JWT_SECRET = "SECRET_TEMP"
-const OTP_EXPIRE = 60
+const OTP_EXPIRE = 300
 
 // ---------------------------------------------------------
 // Utility
@@ -67,34 +67,57 @@ app.options("*", cors())
 // ---------------------------------------------------------
 // SEND OTP
 // ---------------------------------------------------------
+// ---------------------------------------------------------
+// SEND OTP (IMPROVED)
+// ---------------------------------------------------------
 app.put("/Login/sendlink", async (req, res) => {
-  try {
-    const email = req.query.email
-    if (!email) return res.status(400).send("Email required")
-
-    const userRef = db.collection("users").doc(email)
-    const userDoc = await userRef.get()
-
-    if (!userDoc.exists || !userDoc.data().invited) {
-      return res.status(404).send("Belum Ada Invite")
+    try {
+      const email = req.query.email;
+      if (!email) return res.status(400).send("Email required");
+  
+      const userRef = db.collection("users").doc(email);
+      const userDoc = await userRef.get();
+  
+      if (!userDoc.exists || !userDoc.data().invited) {
+        return res.status(404).send("Belum Ada Invite");
+      }
+  
+      const now = Date.now();
+      const prevExpire = userDoc.data().otpExpires?.toMillis?.() || 0;
+      if (prevExpire > now) return res.status(400).send("Mohon tunggu timer selesai");
+  
+      // Generate OTP
+      const otp = generateOTP();
+      const otpExpires = Timestamp.fromMillis(now + OTP_EXPIRE * 1000);
+  
+      // Update Firestore
+      await userRef.update({ otp, otpExpires });
+      console.log(`OTP for ${email}: ${otp}`);
+  
+      // ---------------------------------------------------------
+      // Kirim email menggunakan Firebase Trigger Email Extension
+      // ---------------------------------------------------------
+      await db.collection("mail").add({
+        to: email,
+        message: {
+          subject: "Kode OTP Masuk Akun Anda",
+          html: `
+            <p>Halo,</p>
+            <p>Berikut adalah kode OTP Anda:</p>
+            <h2 style="font-size: 32px; letter-spacing: 4px;">${otp}</h2>
+            <p>Kode ini berlaku selama <b>${OTP_EXPIRE} detik</b>.</p>
+            <p>Jika Anda tidak meminta kode ini, abaikan saja.</p>
+          `,
+        },
+      });
+  
+      return res.status(200).send("OTP Terkirim ke Email");
+    } catch (e) {
+      console.error(e);
+      return res.status(500).send("Server Error");
     }
-
-    const now = Date.now()
-    const prevExpire = userDoc.data().otpExpires?.toMillis?.() || 0
-    if (prevExpire > now) return res.status(400).send("Mohon tunggu timer selesai")
-
-    const otp = generateOTP()
-    const otpExpires = Timestamp.fromMillis(now + OTP_EXPIRE * 1000)
-
-    await userRef.update({ otp, otpExpires })
-    console.log(`OTP for ${email}: ${otp}`)
-
-    return res.status(200).send("OTP Terkirim")
-  } catch (e) {
-    console.error(e)
-    return res.status(500).send("Server Error")
-  }
-})
+  });
+  
 
 // ---------------------------------------------------------
 // VERIFY OTP
