@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Token Generator for Postman</title>
+    <style>
+        body { font-family: monospace; padding: 20px; max-width: 800px; margin: 0 auto; background: #f4f4f4; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        textarea { width: 100%; height: 200px; margin-top: 10px; font-size: 12px; padding: 10px; border: 1px solid #ccc; }
+        button { padding: 10px 20px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 4px; font-size: 16px; }
+        button:hover { background: #0056b3; }
+        #status { margin-top: 10px; font-weight: bold; color: #333; }
+        .env-badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 12px; margin-bottom: 10px; font-weight: bold;}
+        .emulator { background: #ffecb3; color: #664d03; border: 1px solid #ffecb3;}
+        .production { background: #d1e7dd; color: #0f5132; border: 1px solid #badbcc;}
+    </style>
+</head>
+<body>
+
+    <div class="card">
+        <h2>🛠 Firebase Token Generator</h2>
+        <div id="envIndicator">Checking Environment...</div>
+        <p>Login dengan Google untuk mendapatkan <b>idToken</b> buat testing di Postman.</p>
+        
+        <button id="btnLogin">Login with Google</button>
+        <button id="btnLogout" style="background:#dc3545; display:none;">Logout</button>
+        
+        <div id="resultArea" style="display:none; margin-top: 20px;">
+            <p><b>Your ID Token (Valid for 1 hour):</b></p>
+            <textarea id="tokenDisplay" readonly onclick="this.select()"></textarea>
+            <p style="font-size: 12px; color: #666;">*Klik kotak di atas, Ctrl+C, lalu paste di Body Postman.</p>
+        </div>
+        
+        <p id="status"></p>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getAuth, GoogleAuthProvider, signInWithPopup, connectAuthEmulator, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+
+        // --- 1. PASTE CONFIG KAMU DISINI ---
+        const firebaseConfig = {
+          apiKey: "AIzaSyDcc3oP_lGYg9ikBn0mq--wdH27aQ5LFlc",
+          authDomain: "hora-7394b.firebaseapp.com",
+          projectId: "hora-7394b",
+          storageBucket: "hora-7394b.firebasestorage.app",
+          messagingSenderId: "544676101248",
+          appId: "1:544676101248:web:708c651f6c3d20a5b1ba65",
+          measurementId: "G-F9K8JMYEZN"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const provider = new GoogleAuthProvider();
+
+        // --- 2. PENGATURAN EMULATOR (PENTING!) ---
+        // Kode ini otomatis mendeteksi kalau kita buka di localhost
+        // Dia akan connect ke Auth Emulator (Port 9099)
+        if (location.hostname === "localhost" || location.hostname === "127.0.0.1") {
+            // Uncomment baris di bawah ini kalau kamu mau testing LOCAL EMULATOR
+            connectAuthEmulator(auth, "http://127.0.0.1:9099");
+            
+            document.getElementById("envIndicator").innerHTML = '<span class="env-badge emulator">MODE: EMULATOR (Port 9099)</span>';
+            console.log("Menggunakan Auth Emulator!");
+        } else {
+            document.getElementById("envIndicator").innerHTML = '<span class="env-badge production">MODE: PRODUCTION (Real Google)</span>';
+        }
+
+        const btnLogin = document.getElementById("btnLogin");
+        const btnLogout = document.getElementById("btnLogout");
+        const tokenDisplay = document.getElementById("tokenDisplay");
+        const status = document.getElementById("status");
+        const resultArea = document.getElementById("resultArea");
+
+        btnLogin.addEventListener("click", async () => {
+            try {
+                status.innerText = "Pop-up dibuka...";
+                const result = await signInWithPopup(auth, provider);
+                const user = result.user;
+                
+                // Ambil Token
+                const token = await user.getIdToken();
+                
+                tokenDisplay.value = token;
+                resultArea.style.display = "block";
+                status.innerText = `Login Sukses: ${user.email}`;
+                btnLogin.style.display = "none";
+                btnLogout.style.display = "inline-block";
+                
+                console.log("Token:", token);
+            } catch (error) {
+                console.error(error);
+                status.innerText = "Error: " + error.message;
+            }
+        });
+
+        btnLogout.addEventListener("click", () => {
+            signOut(auth).then(() => {
+                location.reload();
+            });
+        });
+    </script>
+</body>
+</html>
