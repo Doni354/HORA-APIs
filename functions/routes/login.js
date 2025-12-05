@@ -8,6 +8,7 @@ const path = require("path");
 const { Timestamp } = require("firebase-admin/firestore");
 const { db, bucket } = require("../config/firebase");
 const { verifyToken } = require("../middleware/token");
+const { logCompanyActivity } = require("../helper/logCompanyActivity");
 const router = express.Router();
 
 // ---------------------------------------------------------
@@ -372,7 +373,7 @@ function generateCompanyCode(length = 6) {
 }
 
 // ---------------------------------------------------------
-// REGISTRASI PERUSAHAAN (Via Google Sign-In)
+// REGISTRASI PERUSAHAAN (Via Google Sign-In) + Activity Log
 // ---------------------------------------------------------
 router.post("/registrasi", async (req, res) => {
   // LOG PERTAMA: Membuktikan request masuk ke kode ini
@@ -470,6 +471,17 @@ router.post("/registrasi", async (req, res) => {
       transaction.set(userRef, userData);
     });
 
+    // --- TAMBAHAN: LOG AKTIFITAS COMPANY ---
+    // Karena ini adalah "Event Pertama" dari perusahaan (Pendaftaran),
+    // Kita catat bahwa Admin ini yang mendirikannya.
+    await logCompanyActivity(idCompany, {
+        actorEmail: email,
+        actorName: username,
+        target: idCompany,
+        action: "REGISTER_COMPANY",
+        description: `User ${username} mendaftarkan perusahaan baru: ${namaPerusahaan}`
+    });
+
     return res.status(200).json({
       message: "Registrasi Berhasil",
       data: { companyCode: idCompany, companyName: namaPerusahaan }
@@ -486,6 +498,7 @@ router.post("/registrasi", async (req, res) => {
     });
   }
 });
+
 // ---------------------------------------------------------
 // REGISTER PEGAWAI (Via Google Sign-In)
 // ---------------------------------------------------------
@@ -583,103 +596,5 @@ router.post("/register-employee", async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------
-// ADMIN APPROVAL (Dengan Notifikasi Email)
-// ---------------------------------------------------------
-router.post("/verify-employee", verifyToken, async (req, res) => {
-  try {
-    const { targetEmail, approved } = req.body;
-    const admin = req.user; // Dari Token
-
-    // 1. Cek Admin
-    if (admin.role !== "admin") {
-      return res.status(403).json({ message: "Hanya Admin yang boleh melakukan ini" });
-    }
-
-    // 2. Cek Target User
-    const targetRef = db.collection("users").doc(targetEmail);
-    const targetDoc = await targetRef.get();
-
-    if (!targetDoc.exists) {
-      return res.status(404).json({ message: "User tidak ditemukan" });
-    }
-
-    const targetData = targetDoc.data();
-
-    // 3. Validasi Perusahaan Sama
-    if (targetData.idCompany !== admin.idCompany) {
-      return res.status(400).json({ message: "User ini tidak mendaftar di perusahaan Anda" });
-    }
-
-    // 4. Pastikan statusnya Candidate
-    if (targetData.role !== "candidate" && targetData.role !== "rejected") {
-       return res.status(400).json({ message: "User ini bukan kandidat pelamar." });
-    }
-
-    // 5. EKSEKUSI APPROVAL / REJECTION
-    if (approved) {
-      // --- KASUS: DITERIMA ---
-      
-      // Update DB
-      await targetRef.update({
-        role: "staff",
-        status: "active",
-        approvedAt: Timestamp.now(),
-        approvedBy: admin.email,
-      });
-
-      // KIRIM EMAIL: DITERIMA
-      await db.collection("mail").add({
-        to: targetEmail,
-        message: {
-          subject: `Selamat! Anda Diterima di ${admin.companyName || "Perusahaan"}`,
-          html: `
-            <h3>Halo, ${targetData.username}</h3>
-            <p>Selamat! Lamaran Anda untuk bergabung dengan <b>${targetData.companyName}</b> telah <b>DISETUJUI</b>.</p>
-            <p>Sekarang status akun Anda adalah <b>Karyawan</b>.</p>
-            <p>Silakan login kembali ke aplikasi untuk memverifikasi email Anda dan mulai bekerja.</p>
-            <br>
-            <p>Salam,<br>Admin HR</p>
-          `,
-        },
-      });
-
-      return res.status(200).json({ message: `Pegawai ${targetEmail} berhasil diterima & notifikasi dikirim.` });
-
-    } else {
-      // --- KASUS: DITOLAK ---
-
-      // Update DB
-      await targetRef.update({
-        role: "rejected",
-        status: "rejected",
-        rejectedAt: Timestamp.now(),
-        rejectedBy: admin.email,
-      });
-
-      // KIRIM EMAIL: DITOLAK
-      await db.collection("mail").add({
-        to: targetEmail,
-        message: {
-          subject: `Update Status Lamaran di ${targetData.companyName}`,
-          html: `
-            <h3>Halo, ${targetData.username}</h3>
-            <p>Terima kasih telah melamar di <b>${targetData.companyName}</b>.</p>
-            <p>Mohon maaf, saat ini kami belum bisa menerima lamaran Anda (Status: <b>Ditolak</b>).</p>
-            <p>Tetap semangat dan sukses untuk karir Anda ke depannya.</p>
-            <br>
-            <p>Salam,<br>Tim HR</p>
-          `,
-        },
-      });
-
-      return res.status(200).json({ message: `Pegawai ${targetEmail} telah ditolak & notifikasi dikirim.` });
-    }
-
-  } catch (e) {
-    console.error("Verify Employee Error:", e);
-    return res.status(500).json({ message: "Server Error" });
-  }
-});
 
 module.exports = router;

@@ -7,6 +7,7 @@ const cors = require("cors");
 const loginRoutes = require("./routes/login");
 const absensiRoutes = require("./routes/absensi");
 const profileRoutes = require("./routes/profile");
+const companyRoutes = require("./routes/company");
 
 // ---------------------------------------------------------
 // Cloud Functions Global Config
@@ -30,7 +31,7 @@ app.options("*", cors());
 app.use("/api/login", loginRoutes);
 app.use("/api/absensi", absensiRoutes);
 app.use("/api/profile", profileRoutes);
-
+app.use("/api/company", companyRoutes);
 // ---------------------------------------------------------
 // TEST
 // ---------------------------------------------------------

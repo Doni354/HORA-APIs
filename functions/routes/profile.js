@@ -1,6 +1,5 @@
 /* eslint-disable */
 const express = require("express");
-
 const { db } = require("../config/firebase");
 const { verifyToken } = require("../middleware/token");
 const { uploadFile } = require("../helper/uploadFile");
@@ -86,11 +85,9 @@ router.get("/company-profile", verifyToken, async (req, res) => {
 router.put("/company-profile", verifyToken, async (req, res) => {
   try {
     if (req.user.role !== "admin") {
-      return res
-        .status(403)
-        .json({
-          message: "Hanya Admin yang boleh mengedit profil perusahaan.",
-        });
+      return res.status(403).json({
+        message: "Hanya Admin yang boleh mengedit profil perusahaan.",
+      });
     }
 
     const { namaPerusahaan, alamatLoc, deskripsi } = req.body;
