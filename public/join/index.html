@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Terima Undangan Bergabung</title>
+    <!-- Tailwind CSS untuk Styling Cepat & Cantik -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome untuk Ikon -->
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"
+    />
+
+    <style>
+      body {
+        background-color: #f3f4f6;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      }
+      .loader {
+        border-top-color: #3498db;
+        -webkit-animation: spinner 1.5s linear infinite;
+        animation: spinner 1.5s linear infinite;
+      }
+      @keyframes spinner {
+        0% {
+          transform: rotate(0deg);
+        }
+        100% {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
+  </head>
+  <body class="flex items-center justify-center min-h-screen">
+    <div
+      class="w-full max-w-md bg-white rounded-xl shadow-lg overflow-hidden m-4"
+    >
+      <!-- Header -->
+      <div class="bg-blue-600 p-6 text-center">
+        <h1 class="text-white text-2xl font-bold">Selamat Datang!</h1>
+        <p class="text-blue-100 mt-2">Silakan lengkapi data untuk bergabung.</p>
+      </div>
+
+      <!-- Content -->
+      <div class="p-8">
+        <!-- Alert Error -->
+        <div
+          id="error-box"
+          class="hidden bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6"
+          role="alert"
+        >
+          <p id="error-msg">Terjadi kesalahan.</p>
+        </div>
+
+        <!-- Alert Success -->
+        <div id="success-box" class="hidden text-center">
+          <div
+            class="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-green-100 mb-4"
+          >
+            <i class="fas fa-check text-green-600 text-2xl"></i>
+          </div>
+          <h3 class="text-lg leading-6 font-medium text-gray-900">
+            Registrasi Berhasil!
+          </h3>
+          <p class="mt-2 text-sm text-gray-500">
+            Akun Anda telah aktif. Silakan download aplikasi dan login.
+          </p>
+          <div class="mt-6">
+            <a
+              href="#"
+              class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 sm:text-sm"
+            >
+              Download Aplikasi
+            </a>
+          </div>
+        </div>
+
+        <!-- Form -->
+        <div id="register-form">
+          <!-- Kode Undangan (Readonly) -->
+          <div class="mb-4">
+            <label class="block text-gray-700 text-sm font-bold mb-2"
+              >Kode Undangan</label
+            >
+            <input
+              type="text"
+              id="inviteCode"
+              readonly
+              class="bg-gray-100 border border-gray-300 text-gray-500 text-sm rounded-lg block w-full p-2.5 cursor-not-allowed"
+            />
+          </div>
+
+          <!-- No Telp -->
+          <div class="mb-4">
+            <label class="block text-gray-700 text-sm font-bold mb-2"
+              >No. Telepon <span class="text-red-500">*</span></label
+            >
+            <input
+              type="tel"
+              id="noTelp"
+              placeholder="Contoh: 08123456789"
+              class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline focus:border-blue-500"
+            />
+          </div>
+
+          <!-- No WA -->
+          <div class="mb-6">
+            <label class="block text-gray-700 text-sm font-bold mb-2"
+              >No. WhatsApp</label
+            >
+            <input
+              type="tel"
+              id="noWA"
+              placeholder="Contoh: 08123456789"
+              class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline focus:border-blue-500"
+            />
+            <div class="mt-2 flex items-center">
+              <input
+                id="same-wa"
+                type="checkbox"
+                class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
+              />
+              <label
+                for="same-wa"
+                class="ml-2 text-sm font-medium text-gray-600"
+                >Sama dengan No. Telepon</label
+              >
+            </div>
+          </div>
+
+          <!-- Google Login Button -->
+          <button
+            id="btn-join"
+            class="w-full bg-white border border-gray-300 text-gray-700 font-semibold py-3 px-4 rounded-lg shadow-sm hover:bg-gray-50 flex items-center justify-center transition duration-150 ease-in-out"
+          >
+            <img
+              src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg"
+              alt="Google"
+              class="w-6 h-6 mr-3"
+            />
+            Masuk dengan Google & Gabung
+          </button>
+
+          <!-- Loading Spinner (Hidden by default) -->
+          <div id="loading" class="hidden flex justify-center mt-4">
+            <div
+              class="loader ease-linear rounded-full border-4 border-t-4 border-gray-200 h-8 w-8"
+            ></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-gray-50 px-6 py-4 text-center">
+        <p class="text-xs text-gray-500">
+          Pastikan Anda menggunakan email yang menerima undangan.
+        </p>
+      </div>
+    </div>
+
+    <!-- FIREBASE SDK -->
+    <script type="module">
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+      import {
+        getAuth,
+        GoogleAuthProvider,
+        signInWithPopup,
+      } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+
+      // ==========================================
+      // 1. CONFIG: ISI DENGAN DATA PROJECT MU
+      // ==========================================
+      const firebaseConfig = {
+        apiKey: "AIzaSyDcc3oP_lGYg9ikBn0mq--wdH27aQ5LFlc",
+        authDomain: "hora-7394b.firebaseapp.com",
+        projectId: "hora-7394b",
+        storageBucket: "hora-7394b.firebasestorage.app",
+        messagingSenderId: "544676101248",
+        appId: "1:544676101248:web:708c651f6c3d20a5b1ba65",
+        measurementId: "G-F9K8JMYEZN",
+      };
+
+      // GANTI INI DENGAN URL API CLOUD FUNCTION KAMU
+      const API_URL =
+        "https://api-y4ntpb3uvq-et.a.run.app/api/company/accept-invite";
+      // Atau jika testing local: "http://127.0.0.1:5001/hora-7394b/asia-southeast2/api/employee-invitation/accept-invite"
+
+      // Init Firebase
+      const app = initializeApp(firebaseConfig);
+      const auth = getAuth(app);
+      const provider = new GoogleAuthProvider();
+
+      // ==========================================
+      // 2. DOM ELEMENTS & UTILS
+      // ==========================================
+      const inviteCodeInput = document.getElementById("inviteCode");
+      const noTelpInput = document.getElementById("noTelp");
+      const noWAInput = document.getElementById("noWA");
+      const checkboxSame = document.getElementById("same-wa");
+      const btnJoin = document.getElementById("btn-join");
+      const loadingDiv = document.getElementById("loading");
+      const errorBox = document.getElementById("error-box");
+      const errorMsg = document.getElementById("error-msg");
+      const formDiv = document.getElementById("register-form");
+      const successBox = document.getElementById("success-box");
+
+      // Logic Checkbox "Sama dengan No Telp"
+      checkboxSame.addEventListener("change", function () {
+        if (this.checked) {
+          noWAInput.value = noTelpInput.value;
+          noWAInput.setAttribute("readonly", true);
+          noWAInput.classList.add("bg-gray-100");
+        } else {
+          noWAInput.removeAttribute("readonly");
+          noWAInput.classList.remove("bg-gray-100");
+        }
+      });
+
+      noTelpInput.addEventListener("input", function () {
+        if (checkboxSame.checked) {
+          noWAInput.value = this.value;
+        }
+      });
+
+      // ==========================================
+      // 3. AMBIL KODE DARI URL
+      // ==========================================
+      // Link contoh: https://domain.com/join.html?code=abc12345
+      const urlParams = new URLSearchParams(window.location.search);
+      const codeFromUrl = urlParams.get("code");
+
+      if (codeFromUrl) {
+        inviteCodeInput.value = codeFromUrl;
+      } else {
+        showError("Link undangan tidak valid. Kode tidak ditemukan.");
+        btnJoin.disabled = true;
+        btnJoin.classList.add("opacity-50", "cursor-not-allowed");
+      }
+
+      // ==========================================
+      // 4. MAIN LOGIC: JOIN BUTTON
+      // ==========================================
+      btnJoin.addEventListener("click", async () => {
+        // A. Validasi Form
+        const phone = noTelpInput.value.trim();
+        const wa = noWAInput.value.trim() || phone; // Kalau WA kosong, pake telp
+
+        if (!phone) {
+          alert("Mohon isi Nomor Telepon");
+          return;
+        }
+
+        if (!codeFromUrl) {
+          alert(
+            "Kode undangan hilang. Silakan refresh atau buka link dari email lagi."
+          );
+          return;
+        }
+
+        hideError();
+        setLoading(true);
+
+        try {
+          // B. Login Google (Pop-up)
+          const result = await signInWithPopup(auth, provider);
+          const user = result.user;
+          const idToken = await user.getIdToken();
+
+          console.log("Google Login Sukses:", user.email);
+
+          // C. Kirim ke Backend API
+          const payload = {
+            idToken: idToken,
+            inviteCode: codeFromUrl,
+            noTelp: phone,
+            noWA: wa,
+          };
+
+          const response = await fetch(API_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          });
+
+          const data = await response.json();
+
+          if (response.ok) {
+            // D. Sukses
+            showSuccess();
+          } else {
+            // E. Gagal dari Backend (misal: kode expired, email beda)
+            showError(data.message || "Gagal memproses undangan.");
+          }
+        } catch (error) {
+          console.error(error);
+          let msg = "Terjadi kesalahan.";
+          if (error.code === "auth/popup-closed-by-user") {
+            msg = "Login dibatalkan. Silakan coba lagi.";
+          } else if (error.message) {
+            msg = error.message;
+          }
+          showError(msg);
+        } finally {
+          setLoading(false);
+        }
+      });
+
+      // ==========================================
+      // 5. HELPER FUNCTIONS
+      // ==========================================
+      function showError(msg) {
+        errorBox.classList.remove("hidden");
+        errorMsg.innerText = msg;
+      }
+
+      function hideError() {
+        errorBox.classList.add("hidden");
+      }
+
+      function showSuccess() {
+        formDiv.classList.add("hidden"); // Sembunyikan form
+        successBox.classList.remove("hidden"); // Munculkan centang hijau
+      }
+
+      function setLoading(isLoading) {
+        if (isLoading) {
+          btnJoin.classList.add("hidden");
+          loadingDiv.classList.remove("hidden");
+        } else {
+          btnJoin.classList.remove("hidden");
+          loadingDiv.classList.add("hidden");
+        }
+      }
+    </script>
+  </body>
+</html>

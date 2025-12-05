@@ -2,6 +2,7 @@
 
 // Load environment variables dari file .env
 require("dotenv").config();
+const { error } = require("firebase-functions/logger");
 const { db } = require('../config/firebase');
 const jwt = require("jsonwebtoken");
 // const { db } = require('./firebaseConfig'); // Pastikan db diimport sesuai struktur foldermu
@@ -53,7 +54,7 @@ const verifyToken = async (req, res, next) => {
     next();
   } catch (e) {
     console.error("Token Error:", e);
-    return res.status(403).json({ message: "Token Invalid atau Kadaluarsa" });
+    return res.status(403).json({ message: "Token Invalid atau Kadaluarsa", error: e, token: token});
   }
 };
 

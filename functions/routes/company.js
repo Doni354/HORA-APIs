@@ -1,4 +1,5 @@
 /* eslint-disable */
+const admin = require("firebase-admin");
 require("dotenv").config();
 const express = require("express");
 const { Timestamp } = require("firebase-admin/firestore");
@@ -7,6 +8,7 @@ const { verifyToken } = require("../middleware/token");
 const { logCompanyActivity } = require("../helper/logCompanyActivity");
 const { auth } = require("firebase-admin");
 const router = express.Router();
+const crypto = require("crypto");
 
 // ---------------------------------------------------------
 // ADMIN APPROVAL (Dengan Notifikasi Email + Activity Log)
@@ -147,11 +149,15 @@ router.post("/fire-employee", verifyToken, async (req, res) => {
     const actor = req.user; // Admin yang melakukan aksi
 
     // Validasi Input
-    if (!targetEmail || !reason) {
-      return res
-        .status(400)
-        .json({ message: "Email target dan alasan pemecatan wajib diisi." });
+    if (!targetEmail) {
+      return res.status(400).json({ message: "Email target wajib diisi." });
     }
+
+    // Jadikan reason optional (fallback)
+    const finalReason =
+      reason && reason.trim() !== ""
+        ? reason
+        : "Tidak ada alasan yang diberikan";
 
     // 1. Cek Permission Actor
     if (actor.role !== "admin") {
@@ -177,60 +183,56 @@ router.post("/fire-employee", verifyToken, async (req, res) => {
         .json({ message: "Pegawai ini bukan dari perusahaan Anda." });
     }
 
-    // 4. PROTEKSI OWNER (Mekanisme Jabatan)
-    // Kita harus ambil data Company dulu untuk tau siapa OWNER aslinya
+    // 4. PROTEKSI OWNER
     const companyDoc = await db
       .collection("companies")
       .doc(actor.idCompany)
       .get();
     const companyData = companyDoc.data();
 
-    // Jika target adalah Owner, Admin biasa TIDAK BOLEH memecatnya
     if (targetData.uid === companyData.ownerUid) {
-      return res
-        .status(403)
-        .json({
-          message:
-            "TINDAKAN ILEGAL: Anda tidak bisa memecat Pemilik Perusahaan (Owner).",
-        });
+      return res.status(403).json({
+        message:
+          "TINDAKAN ILEGAL: Anda tidak bisa memecat Pemilik Perusahaan (Owner).",
+      });
     }
 
     // 5. Eksekusi Pemecatan
     await targetRef.update({
-      role: "rejected", // Role kita ubah ke rejected (biar sama kayak user ditolak)
-      status: "fired", // Status spesifik 'fired' biar tau ini dipecat, bukan ditolak pas daftar
+      role: "rejected",
+      status: "fired",
       firedAt: Timestamp.now(),
       firedBy: actor.email,
-      firedReason: reason, // Simpan alasan di DB juga buat arsip
-      idCompany: null, // Opsional: Lepas ikatan perusahaan (atau biarkan biar ada history)
+      firedReason: finalReason,
+      idCompany: null,
     });
 
-    // 6. LOG AKTIVITAS (Company Level)
+    // 6. LOG Aktivitas
     await logCompanyActivity(actor.idCompany, {
       actorEmail: actor.email,
       actorName: actor.nama,
       target: targetEmail,
       action: "FIRE_EMPLOYEE",
-      description: `Admin ${actor.nama} mengeluarkan ${targetData.username}. Alasan: ${reason}`,
+      description: `Admin ${actor.nama} mengeluarkan ${targetData.username}. Alasan: ${finalReason}`,
     });
 
-    // 7. KIRIM EMAIL (Wajib ada alasan)
+    // 7. Kirim Email
     await db.collection("mail").add({
       to: targetEmail,
       message: {
         subject: `Pemberitahuan Penghentian Kerja - ${companyData.namaPerusahaan}`,
         html: `
-            <h3>Halo, ${targetData.username}</h3>
-            <p>Melalui email ini, kami menginformasikan bahwa akses kerja Anda di <b>${companyData.namaPerusahaan}</b> telah <b>DICABUT</b>.</p>
-            
-            <div style="background-color: #f8d7da; padding: 15px; border-radius: 5px; color: #721c24;">
-              <strong>Alasan Pengeluaran:</strong><br>
-              "${reason}"
-            </div>
+              <h3>Halo, ${targetData.username}</h3>
+              <p>Melalui email ini, kami menginformasikan bahwa akses kerja Anda di <b>${companyData.namaPerusahaan}</b> telah <b>DICABUT</b>.</p>
+              
+              <div style="background-color: #f8d7da; padding: 15px; border-radius: 5px; color: #721c24;">
+                <strong>Alasan Pengeluaran:</strong><br>
+                "${finalReason}"
+              </div>
   
-            <p>Jika Anda merasa ini adalah kesalahan, silakan hubungi manajemen perusahaan.</p>
-            <p>Terima kasih atas kontribusi Anda selama ini.</p>
-          `,
+              <p>Jika Anda merasa ini adalah kesalahan, silakan hubungi manajemen perusahaan.</p>
+              <p>Terima kasih atas kontribusi Anda selama ini.</p>
+            `,
       },
     });
 
@@ -514,4 +516,201 @@ router.get("/list", verifyToken, async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------
+// 1. KIRIM UNDANGAN (Admin Input Email -> Kirim Link)
+// ---------------------------------------------------------
+router.post("/send-invite", verifyToken, async (req, res) => {
+    try {
+      const { targetEmail } = req.body;
+      const adminData = req.user; // Dari Token
+  
+      // A. Validasi
+      if (!targetEmail) return res.status(400).json({ message: "Email wajib diisi." });
+      if (adminData.role !== "admin") return res.status(403).json({ message: "Hanya Admin bisa mengundang." });
+  
+      // --- FIX: AMBIL DATA PERUSAHAAN DARI DB ---
+      // Karena di token tidak ada nama perusahaan
+      const companyDoc = await db.collection("companies").doc(adminData.idCompany).get();
+      let companyName = "Perusahaan";
+      
+      if (companyDoc.exists) {
+          companyName = companyDoc.data().namaPerusahaan;
+      } else {
+          return res.status(404).json({ message: "Data perusahaan tidak ditemukan." });
+      }
+  
+      // B. Cek apakah user sudah terdaftar di sistem?
+      const userDoc = await db.collection("users").doc(targetEmail).get();
+      if (userDoc.exists) {
+        const data = userDoc.data();
+        // UPDATE: Hanya tolak jika user AKTIF atau PENDING.
+        // Jika user statusnya 'rejected' (pernah ditolak/dipecat), BOLEH di-invite lagi.
+        if (data.role !== "rejected" && data.status !== "fired") {
+          return res.status(400).json({ 
+              message: "Email ini sudah terdaftar aktif atau sedang menunggu persetujuan.",
+              currentStatus: data.status 
+          });
+        }
+      }
+  
+      // C. Generate Token Undangan Unik
+      const inviteCode = crypto.randomBytes(16).toString("hex"); 
+      
+      // D. Simpan Data Invitation (Temporary)
+      await db.collection("invitations").doc(inviteCode).set({
+        email: targetEmail,
+        idCompany: adminData.idCompany,
+        companyName: companyName, // <--- Pakai variabel yang baru diambil dari DB
+        role: "staff", 
+        invitedBy: adminData.email,
+        createdAt: Timestamp.now(),
+        expiresAt: Timestamp.fromMillis(Date.now() + 24 * 60 * 60 * 1000) // 24 Jam
+      });
+  
+      // E. Log Aktivitas
+      await logCompanyActivity(adminData.idCompany, {
+        actorEmail: adminData.email,
+        actorName: adminData.nama || "Admin",
+        target: targetEmail,
+        action: "SEND_INVITE",
+        description: `Admin ${adminData.nama || "Admin"} mengirim undangan ke ${targetEmail}`,
+      });
+  
+      // F. Kirim Email
+      const inviteLink = `https://hora-7394b.web.app/join/?code=${inviteCode}`;
+      
+      await db.collection("mail").add({
+        to: targetEmail,
+        message: {
+          subject: `Undangan Bergabung - ${companyName}`,
+          html: `
+            <h3>Halo!</h3>
+            <p>Anda diundang oleh <b>${adminData.nama || "Admin"}</b> untuk bergabung ke tim <b>${companyName}</b>.</p>
+            <p>Untuk menerima undangan ini, silakan klik link di bawah, lalu:</p>
+            <ol>
+              <li>Login menggunakan Akun Google (Email: ${targetEmail})</li>
+              <li>Lengkapi data diri (No Telp & WA)</li>
+            </ol>
+            <br>
+            <a href="${inviteLink}" style="background:#28a745; color:white; padding:12px 24px; text-decoration:none; border-radius:5px; display:inline-block;">
+               Buka Undangan
+            </a>
+          `,
+        },
+      });
+  
+      return res.status(200).json({ message: `Undangan berhasil dikirim ke ${targetEmail}` });
+  
+    } catch (e) {
+      console.error("Send Invite Error:", e);
+      return res.status(500).json({ message: "Server Error" });
+    }
+  });
+  
+  
+  // ---------------------------------------------------------
+  // 2. TERIMA UNDANGAN (User Login Google + Input Data)
+  // ---------------------------------------------------------
+  router.post("/accept-invite", async (req, res) => {
+    try {
+      const { idToken, inviteCode, noTelp, noWA } = req.body;
+  
+      // A. Validasi Kelengkapan Data
+      if (!idToken || !inviteCode || !noTelp) {
+        return res.status(400).json({ 
+          message: "Data tidak lengkap. Harap Login Google dan isi No Telepon." 
+        });
+      }
+  
+      // B. Cek Kode Undangan
+      const inviteRef = db.collection("invitations").doc(inviteCode);
+      const inviteDoc = await inviteRef.get();
+  
+      if (!inviteDoc.exists) {
+        return res.status(404).json({ message: "Kode undangan tidak valid." });
+      }
+  
+      const inviteData = inviteDoc.data();
+  
+      // Cek Expired
+      if (inviteData.expiresAt.toMillis() < Date.now()) {
+        return res.status(400).json({ message: "Kode undangan sudah kadaluarsa." });
+      }
+  
+      // C. Verifikasi Google Token
+      let decodedToken;
+      try {
+        decodedToken = await admin.auth().verifyIdToken(idToken.toString().trim());
+      } catch (error) {
+        return res.status(401).json({ message: "Sesi Google tidak valid." });
+      }
+  
+      const email = decodedToken.email;
+      const uid = decodedToken.uid;
+      const username = decodedToken.name || email.split("@")[0];
+      const photoURL = decodedToken.picture || "";
+  
+      // D. SECURITY CHECK: Email Google VS Email Undangan
+      if (email !== inviteData.email) {
+        return res.status(403).json({ 
+          message: `Undangan ini khusus untuk email ${inviteData.email}, bukan ${email}.` 
+        });
+      }
+  
+      // E. Cek User Existing (Biar gak numpuk)
+      const userRef = db.collection("users").doc(email);
+      const userCheck = await userRef.get();
+      
+      if (userCheck.exists) {
+          const data = userCheck.data();
+          if (data.role !== "rejected" && data.status !== "fired") {
+              await inviteRef.delete(); 
+              return res.status(400).json({ message: "Akun Anda sudah terdaftar aktif. Silakan login." });
+          }
+      }
+  
+      // F. CREATE USER (Final)
+      const newUser = {
+        uid: uid,
+        username: username,
+        alamatEmail: email, 
+        photoURL: photoURL,
+        authProvider: "google",
+        noTelp: noTelp,
+        noWA: noWA || noTelp, 
+        idCompany: inviteData.idCompany,
+        companyName: inviteData.companyName, // Ambil dari invitation yg sudah benar namanya
+        role: inviteData.role, 
+        status: "active", 
+        verified: false, 
+        createdAt: Timestamp.now(),
+        lastLogin: Timestamp.now()
+      };
+  
+      // Simpan ke Firestore
+      await userRef.set(newUser);
+  
+      // G. Hapus Invitation Code
+      await inviteRef.delete();
+  
+      // H. Log Aktivitas Company
+      await logCompanyActivity(inviteData.idCompany, {
+          actorEmail: email,
+          actorName: username,
+          target: inviteData.idCompany,
+          action: "JOIN_VIA_INVITE",
+          description: `Pegawai ${username} resmi bergabung via undangan.`
+      });
+  
+      return res.status(200).json({ 
+        message: "Registrasi Berhasil! Selamat bergabung.",
+        user: { email, role: "staff", company: inviteData.companyName }
+      });
+  
+    } catch (e) {
+      console.error("Accept Invite Error:", e);
+      return res.status(500).json({ message: "Server Error" });
+    }
+  });
+  
 module.exports = router;

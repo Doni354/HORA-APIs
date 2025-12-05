@@ -63,54 +63,96 @@ router.get("/list-employees", verifyToken, async (req, res) => {
 // COMPANY PROFILE
 // =========================================================
 
-// 2. VIEW COMPANY PROFILE
+// ---------------------------------------------------------
+// 1. GET COMPANY PROFILE (Sesuai Format Request)
+// ---------------------------------------------------------
 router.get("/company-profile", verifyToken, async (req, res) => {
   try {
-    const companyId = req.user.idCompany;
+    const user = req.user;
 
-    const companyDoc = await db.collection("companies").doc(companyId).get();
-    if (!companyDoc.exists) {
-      return res
-        .status(404)
-        .json({ message: "Data perusahaan tidak ditemukan" });
+    // Validasi user harus punya company
+    if (!user.idCompany) {
+      return res.status(400).json({ message: "User tidak terikat dengan perusahaan manapun." });
     }
 
-    return res.status(200).json(companyDoc.data());
+    const companyDoc = await db.collection("companies").doc(user.idCompany).get();
+
+    if (!companyDoc.exists) {
+      return res.status(404).json({ message: "Data perusahaan tidak ditemukan" });
+    }
+
+    const data = companyDoc.data();
+
+    // MAPPING DATA (Agar sesuai key JSON yang diminta)
+    const formattedProfile = {
+      namaPerusahaan: data.namaPerusahaan || "",
+      idperusahaan: data.idCompany || "",    // Mapping: idCompany DB -> idperusahaan JSON
+      logoPerusahaan: data.logoUrl || "",    // Default kosong jika belum di-upload
+      alamatLoc: data.alamatLoc || "",
+      // Pastikan tipe data string sesuai contoh request ("98.63...")
+      alamatLongtitude: data.longitude ? data.longitude.toString() : "0.0", 
+      alamatLatitude: data.latitude ? data.latitude.toString() : "0.0",
+      totalLike: data.totalLike || 0
+    };
+
+    // Return dalam bentuk Array [...] sesuai request
+    return res.status(200).json([formattedProfile]);
+
   } catch (e) {
+    console.error("Get Company Profile Error:", e);
     return res.status(500).json({ message: "Error fetch company profile" });
   }
 });
 
-// 3. EDIT COMPANY PROFILE (TEXT DATA)
-router.put("/company-profile", verifyToken, async (req, res) => {
-  try {
-    if (req.user.role !== "admin") {
-      return res.status(403).json({
-        message: "Hanya Admin yang boleh mengedit profil perusahaan.",
-      });
-    }
 
-    const { namaPerusahaan, alamatLoc, deskripsi } = req.body;
-    const companyId = req.user.idCompany;
+// // 2. VIEW COMPANY PROFILE
+// router.get("/company-profile", verifyToken, async (req, res) => {
+//   try {
+//     const companyId = req.user.idCompany;
 
-    await db
-      .collection("companies")
-      .doc(companyId)
-      .update({
-        namaPerusahaan: namaPerusahaan,
-        alamatLoc: alamatLoc,
-        deskripsi: deskripsi || "",
-        updatedAt: Timestamp.now(),
-        updatedBy: req.user.email,
-      });
+//     const companyDoc = await db.collection("companies").doc(companyId).get();
+//     if (!companyDoc.exists) {
+//       return res
+//         .status(404)
+//         .json({ message: "Data perusahaan tidak ditemukan" });
+//     }
 
-    return res
-      .status(200)
-      .json({ message: "Profil Perusahaan berhasil diupdate" });
-  } catch (e) {
-    return res.status(500).json({ message: "Gagal update profil perusahaan" });
-  }
-});
+//     return res.status(200).json(companyDoc.data());
+//   } catch (e) {
+//     return res.status(500).json({ message: "Error fetch company profile" });
+//   }
+// });
+
+// // 3. EDIT COMPANY PROFILE (TEXT DATA)
+// router.put("/company-profile", verifyToken, async (req, res) => {
+//   try {
+//     if (req.user.role !== "admin") {
+//       return res.status(403).json({
+//         message: "Hanya Admin yang boleh mengedit profil perusahaan.",
+//       });
+//     }
+
+//     const { namaPerusahaan, alamatLoc, deskripsi } = req.body;
+//     const companyId = req.user.idCompany;
+
+//     await db
+//       .collection("companies")
+//       .doc(companyId)
+//       .update({
+//         namaPerusahaan: namaPerusahaan,
+//         alamatLoc: alamatLoc,
+//         deskripsi: deskripsi || "",
+//         updatedAt: Timestamp.now(),
+//         updatedBy: req.user.email,
+//       });
+
+//     return res
+//       .status(200)
+//       .json({ message: "Profil Perusahaan berhasil diupdate" });
+//   } catch (e) {
+//     return res.status(500).json({ message: "Gagal update profil perusahaan" });
+//   }
+// });
 
 // 4. UPLOAD COMPANY LOGO (IMAGE DATA) - NEW!
 router.post("/upload-company-logo", verifyToken, async (req, res) => {
