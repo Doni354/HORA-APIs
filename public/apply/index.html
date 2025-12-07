@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lamar Pekerjaan</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen">
+
+    <div class="w-full max-w-md bg-white rounded-xl shadow-md overflow-hidden m-4">
+        
+        <!-- Header Company Info -->
+        <div class="bg-indigo-600 p-6 text-center text-white">
+            <!-- Logo Placeholder -->
+            <div id="company-logo-container" class="hidden mb-3">
+                <img id="company-logo" src="" alt="Logo" class="w-20 h-20 rounded-full mx-auto border-4 border-white object-cover">
+            </div>
+            
+            <h2 class="text-xl font-bold">Lamar Pekerjaan</h2>
+            <p class="mt-2 text-indigo-100 text-sm">di <span id="company-name" class="font-bold underline">Loading...</span></p>
+        </div>
+
+        <div class="p-8">
+            <!-- Alert Error -->
+            <div id="error-box" class="hidden bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6 text-sm"></div>
+
+            <!-- Alert Success -->
+            <div id="success-box" class="hidden text-center">
+                <div class="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-green-100 mb-4">
+                    <i class="fas fa-check text-green-600 text-2xl"></i>
+                </div>
+                <h3 class="text-lg font-medium text-gray-900">Lamaran Terkirim!</h3>
+                <p class="mt-2 text-sm text-gray-500">Data Anda sudah masuk ke sistem kami sebagai <b>Candidate</b>. Silakan tunggu konfirmasi dari Admin/HRD.</p>
+            </div>
+
+            <!-- Form -->
+            <div id="apply-form">
+                <div class="mb-4">
+                    <label class="block text-gray-700 text-sm font-bold mb-2">No. Telepon <span class="text-red-500">*</span></label>
+                    <input type="tel" id="noTelp" class="shadow border rounded w-full py-2 px-3 text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+
+                <div class="mb-6">
+                    <label class="block text-gray-700 text-sm font-bold mb-2">No. WhatsApp</label>
+                    <input type="tel" id="noWA" class="shadow border rounded w-full py-2 px-3 text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+
+                <button id="btn-apply" class="w-full bg-white border border-gray-300 text-gray-700 font-semibold py-3 px-4 rounded-lg shadow-sm hover:bg-gray-50 flex items-center justify-center transition">
+                    <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" class="w-5 h-5 mr-3">
+                    Login Google & Kirim Lamaran
+                </button>
+            </div>
+            
+            <!-- Loading -->
+            <div id="loading" class="hidden text-center py-4">
+                <i class="fas fa-circle-notch fa-spin text-indigo-600 text-2xl"></i>
+                <p class="text-gray-500 text-sm mt-2">Sedang memproses...</p>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getAuth, GoogleAuthProvider, signInWithPopup } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+
+        // CONFIG
+        const firebaseConfig = {
+            apiKey: "AIzaSyDcc3oP_lGYg9ikBn0mq--wdH27aQ5LFlc",
+            authDomain: "hora-7394b.firebaseapp.com",
+            projectId: "hora-7394b",
+            storageBucket: "hora-7394b.firebasestorage.app",
+            messagingSenderId: "544676101248",
+            appId: "1:544676101248:web:708c651f6c3d20a5b1ba65",
+            measurementId: "G-F9K8JMYEZN",
+          };
+
+        // API URL (Sesuaikan dengan deploy function kamu)
+        const BASE_API = "https://api-y4ntpb3uvq-et.a.run.app/api/company/"; 
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const provider = new GoogleAuthProvider();
+
+        // Elements
+        const companyNameEl = document.getElementById('company-name');
+        const companyLogoContainer = document.getElementById('company-logo-container');
+        const companyLogoImg = document.getElementById('company-logo');
+        const btnApply = document.getElementById('btn-apply');
+        const noTelp = document.getElementById('noTelp');
+        const noWA = document.getElementById('noWA');
+
+        // 1. Get ID from URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const idCompany = urlParams.get('id');
+
+        if (!idCompany) {
+            showError("Link tidak valid. ID Perusahaan tidak ditemukan.");
+            document.getElementById('apply-form').classList.add('hidden');
+        } else {
+            fetchCompanyInfo(idCompany);
+        }
+
+        // 2. Fetch Company Info (Nama & Logo)
+        async function fetchCompanyInfo(id) {
+            try {
+                const res = await fetch(`${BASE_API}/apply-company/${id}`);
+                if (!res.ok) throw new Error("Perusahaan tidak ditemukan");
+                const data = await res.json();
+                
+                companyNameEl.innerText = data.namaPerusahaan;
+                
+                if (data.logoUrl) {
+                    companyLogoImg.src = data.logoUrl;
+                    companyLogoContainer.classList.remove('hidden');
+                }
+            } catch (err) {
+                companyNameEl.innerText = "Error";
+                showError(err.message);
+                btnApply.disabled = true;
+                btnApply.classList.add('opacity-50');
+            }
+        }
+
+        // 3. Handle Submit
+        btnApply.addEventListener('click', async () => {
+            const phone = noTelp.value.trim();
+            if(!phone) return alert("Isi No Telepon dulu!");
+
+            toggleLoading(true);
+            
+            try {
+                // Login Google
+                const result = await signInWithPopup(auth, provider);
+                const token = await result.user.getIdToken();
+
+                // Submit API
+                const res = await fetch(`${BASE_API}/apply`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        idToken: token,
+                        idCompany: idCompany,
+                        noTelp: phone,
+                        noWA: noWA.value.trim() || phone
+                    })
+                });
+
+                const data = await res.json();
+
+                if (res.ok) {
+                    document.getElementById('apply-form').classList.add('hidden');
+                    document.getElementById('success-box').classList.remove('hidden');
+                } else {
+                    showError(data.message || "Gagal mengirim lamaran.");
+                }
+
+            } catch (err) {
+                console.error(err);
+                showError("Terjadi kesalahan sistem atau login dibatalkan.");
+            } finally {
+                toggleLoading(false);
+            }
+        });
+
+        function showError(msg) {
+            const el = document.getElementById('error-box');
+            el.innerText = msg;
+            el.classList.remove('hidden');
+        }
+
+        function toggleLoading(show) {
+            const form = document.getElementById('apply-form');
+            const loading = document.getElementById('loading');
+            if(show) {
+                form.classList.add('opacity-50', 'pointer-events-none');
+                loading.classList.remove('hidden');
+            } else {
+                form.classList.remove('opacity-50', 'pointer-events-none');
+                loading.classList.add('hidden');
+            }
+        }
+    </script>
+</body>
+</html>

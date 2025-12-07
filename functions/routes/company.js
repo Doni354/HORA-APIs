@@ -713,4 +713,160 @@ router.post("/send-invite", verifyToken, async (req, res) => {
     }
   });
   
+  // ---------------------------------------------------------
+// 1. GET INFO PERUSAHAAN (Public - Tanpa Token)
+// ---------------------------------------------------------
+// Gunanya biar pas user buka link, muncul "Anda akan melamar ke PT Maju Mundur"
+// Bukan cuma ID acak doang.
+router.get("/apply-company/:idCompany", async (req, res) => {
+    try {
+      const { idCompany } = req.params;
+  
+      const companyDoc = await db.collection("companies").doc(idCompany).get();
+      if (!companyDoc.exists) {
+        return res.status(404).json({ message: "Perusahaan tidak ditemukan." });
+      }
+  
+      const data = companyDoc.data();
+      // Return data secukupnya aja (jangan semua data sensitif)
+      return res.status(200).json({
+        namaPerusahaan: data.namaPerusahaan,
+        logoUrl: data.logoUrl || "",
+        alamatLoc: data.alamatLoc || ""
+      });
+  
+    } catch (e) {
+      return res.status(500).json({ message: "Server Error" });
+    }
+  });
+  
+// ---------------------------------------------------------
+// 2. SUBMIT LAMARAN (User Login Google -> Jadi Candidate)
+// ---------------------------------------------------------
+router.post("/apply", async (req, res) => {
+    try {
+      const { idToken, idCompany, noTelp, noWA } = req.body;
+  
+      // A. Validasi
+      if (!idToken || !idCompany || !noTelp) {
+        return res.status(400).json({ message: "Data tidak lengkap." });
+      }
+  
+      // B. Cek Perusahaan Valid
+      const companyDoc = await db.collection("companies").doc(idCompany).get();
+      if (!companyDoc.exists) {
+        return res.status(404).json({ message: "Perusahaan tujuan tidak ditemukan." });
+      }
+      const companyData = companyDoc.data();
+  
+      // C. Verifikasi Google Token
+      let decodedToken;
+      try {
+        decodedToken = await admin.auth().verifyIdToken(idToken.toString().trim());
+      } catch (error) {
+        return res.status(401).json({ message: "Sesi Google tidak valid." });
+      }
+  
+      const email = decodedToken.email;
+      const uid = decodedToken.uid;
+      const username = decodedToken.name || email.split("@")[0];
+      const photoURL = decodedToken.picture || "";
+  
+      // D. Cek Status User di Database
+      const userRef = db.collection("users").doc(email);
+      const userDoc = await userRef.get();
+  
+      if (userDoc.exists) {
+        const data = userDoc.data();
+        
+        // 1. VALIDASI PENTING: User Aktif (Admin/Staff) DITOLAK
+        if (["admin", "staff"].includes(data.role)) {
+          return res.status(400).json({ 
+              // Pesan ini sudah benar untuk mencegah admin menimpa akunnya sendiri
+              message: `Akun ini sudah terdaftar sebagai ${data.role} di ${data.companyName || "perusahaan lain"}. Harap gunakan email berbeda.`,
+              role: data.role 
+          });
+        }
+  
+        // 2. Kalau user sudah Candidate (nunggu approval) -> TOLAK (Biar gak spam)
+        if (data.role === "candidate") {
+          return res.status(400).json({ 
+              message: "Lamaran Anda sebelumnya sedang diproses. Harap tunggu konfirmasi Admin.",
+          });
+        }
+  
+        // 3. Kalau user statusnya 'fired' atau 'rejected', BOLEH daftar ulang (Re-apply)
+      }
+  
+      // E. CREATE / UPDATE USER (Sebagai Candidate)
+      const applicantData = {
+        uid: uid,
+        username: username,
+        alamatEmail: email,
+        photoURL: photoURL,
+        authProvider: "google",
+        noTelp: noTelp,
+        noWA: noWA || noTelp,
+        
+        // Link ke Company Tujuan
+        idCompany: idCompany,
+        companyName: companyData.namaPerusahaan,
+        
+        role: "candidate",       // <--- Masuk sebagai Candidate
+        status: "pending_approval", 
+        
+        verified: true, // Email google dianggap verified
+        createdAt: Timestamp.now(), 
+        lastLogin: Timestamp.now()
+      };
+  
+      // Pakai set merge: true (penting untuk overwrite data lama jika ada)
+      await userRef.set(applicantData, { merge: true });
+  
+      // F. Log Aktivitas Company
+      await logCompanyActivity(idCompany, {
+          actorEmail: email,
+          actorName: username,
+          target: idCompany,
+          action: "NEW_APPLICANT",
+          description: `${username} melamar pekerjaan via Link Publik.`
+      });
+  
+      return res.status(200).json({
+        message: "Lamaran berhasil dikirim. Menunggu persetujuan Admin.",
+        user: { email, role: "candidate" }
+      });
+  
+    } catch (e) {
+      console.error("Public Join Error:", e);
+      return res.status(500).json({ message: "Server Error" });
+    }
+  });
+
+// ---------------------------------------------------------
+// 3. GET PUBLIC JOIN LINK (Untuk Admin Share) - NEW!
+// ---------------------------------------------------------
+router.get("/public-link", verifyToken, async (req, res) => {
+    try {
+      const user = req.user;
+  
+      // Pastikan user punya ID Company
+      if (!user.idCompany) {
+        return res.status(400).json({ message: "Anda tidak terikat dengan perusahaan manapun." });
+      }
+  
+      // Format Link sesuai permintaan
+      // Pastikan ID Company di-encode biar aman di URL (walaupun biasanya aman)
+      const publicLink = `https://hora-7394b.web.app/apply/?id=${user.idCompany}`;
+  
+      return res.status(200).json({
+        message: "Link public join berhasil diambil",
+        link: publicLink
+      });
+  
+    } catch (e) {
+      console.error("Get Public Link Error:", e);
+      return res.status(500).json({ message: "Server Error" });
+    }
+  });
 module.exports = router;
