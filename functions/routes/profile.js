@@ -73,13 +73,20 @@ router.get("/company-profile", verifyToken, async (req, res) => {
 
     // Validasi user harus punya company
     if (!user.idCompany) {
-      return res.status(400).json({ message: "User tidak terikat dengan perusahaan manapun." });
+      return res
+        .status(400)
+        .json({ message: "User tidak terikat dengan perusahaan manapun." });
     }
 
-    const companyDoc = await db.collection("companies").doc(user.idCompany).get();
+    const companyDoc = await db
+      .collection("companies")
+      .doc(user.idCompany)
+      .get();
 
     if (!companyDoc.exists) {
-      return res.status(404).json({ message: "Data perusahaan tidak ditemukan" });
+      return res
+        .status(404)
+        .json({ message: "Data perusahaan tidak ditemukan" });
     }
 
     const data = companyDoc.data();
@@ -87,18 +94,20 @@ router.get("/company-profile", verifyToken, async (req, res) => {
     // MAPPING DATA (Agar sesuai key JSON yang diminta)
     const formattedProfile = {
       namaPerusahaan: data.namaPerusahaan || "",
-      idperusahaan: data.idCompany || "",    // Mapping: idCompany DB -> idperusahaan JSON
-      logoPerusahaan: data.logoUrl || "",    // Default kosong jika belum di-upload
+      idperusahaan: data.idCompany || "", // Mapping: idCompany DB -> idperusahaan JSON
+      logoPerusahaan: data.logoUrl || "", // Default kosong jika belum di-upload
       alamatLoc: data.alamatLoc || "",
+      noWA: data.noWA || "",
+      noTelp: data.noTelp || "",
+      logo: data.logoUrl || "",
       // Pastikan tipe data string sesuai contoh request ("98.63...")
-      alamatLongtitude: data.longitude ? data.longitude.toString() : "0.0", 
+      alamatLongtitude: data.longitude ? data.longitude.toString() : "0.0",
       alamatLatitude: data.latitude ? data.latitude.toString() : "0.0",
-      totalLike: data.totalLike || 0
+      totalLike: data.totalLike || 0,
     };
 
     // Return dalam bentuk Array [...] sesuai request
     return res.status(200).json([formattedProfile]);
-
   } catch (e) {
     console.error("Get Company Profile Error:", e);
     return res.status(500).json({ message: "Error fetch company profile" });
@@ -111,18 +120,22 @@ router.get("/company-profile", verifyToken, async (req, res) => {
 router.put("/company-profile", verifyToken, async (req, res) => {
   try {
     const user = req.user;
-    const { 
-        namaPerusahaan, 
-        alamatLoc, 
-        noTelp, 
-        noWA, 
-        alamatLatitude, 
-        alamatLongtitude 
+    const {
+      namaPerusahaan,
+      alamatLoc,
+      noTelp,
+      noWA,
+      alamatLatitude,
+      alamatLongtitude,
     } = req.body;
 
     // Security: Hanya Admin yang boleh edit
     if (user.role !== "admin") {
-      return res.status(403).json({ message: "Hanya Admin yang boleh mengedit profil perusahaan." });
+      return res
+        .status(403)
+        .json({
+          message: "Hanya Admin yang boleh mengedit profil perusahaan.",
+        });
     }
 
     if (!user.idCompany) {
@@ -137,7 +150,7 @@ router.put("/company-profile", verifyToken, async (req, res) => {
     if (alamatLoc) updateData.alamatLoc = alamatLoc;
     if (noTelp) updateData.noTelp = noTelp;
     if (noWA) updateData.noWA = noWA;
-    if (alamatLatitude) updateData.latitude = alamatLatitude;      // Mapping ke field DB: latitude
+    if (alamatLatitude) updateData.latitude = alamatLatitude; // Mapping ke field DB: latitude
     if (alamatLongtitude) updateData.longitude = alamatLongtitude; // Mapping ke field DB: longitude
 
     // Lakukan update
@@ -149,14 +162,15 @@ router.put("/company-profile", verifyToken, async (req, res) => {
       actorName: user.nama || "Admin",
       target: user.idCompany,
       action: "UPDATE_PROFILE",
-      description: `Admin ${user.nama || "Admin"} memperbarui profil perusahaan.`
+      description: `Admin ${
+        user.nama || "Admin"
+      } memperbarui profil perusahaan.`,
     });
 
-    return res.status(200).json({ 
+    return res.status(200).json({
       message: "Data perusahaan berhasil diperbarui.",
-      updatedFields: updateData
+      updatedFields: updateData,
     });
-
   } catch (e) {
     console.error("Update Text Profile Error:", e);
     return res.status(500).json({ message: "Server Error" });
@@ -172,7 +186,9 @@ router.post("/company-logo", verifyToken, async (req, res) => {
 
     // Security: Hanya Admin
     if (user.role !== "admin") {
-      return res.status(403).json({ message: "Hanya Admin yang boleh mengubah logo." });
+      return res
+        .status(403)
+        .json({ message: "Hanya Admin yang boleh mengubah logo." });
     }
 
     if (!user.idCompany) {
@@ -182,8 +198,8 @@ router.post("/company-logo", verifyToken, async (req, res) => {
     // Fungsi penamaan file unik
     // Format: logo_IDCOMPANY_TIMESTAMP.jpg
     const generateFileName = (fileExt) => {
-        const timestamp = Date.now();
-        return `logo_${user.idCompany}_${timestamp}${fileExt}`;
+      const timestamp = Date.now();
+      return `logo_${user.idCompany}_${timestamp}${fileExt}`;
     };
 
     // Panggil Helper uploadFile
@@ -192,7 +208,7 @@ router.post("/company-logo", verifyToken, async (req, res) => {
 
     // Update URL Logo di Firestore
     await db.collection("companies").doc(user.idCompany).update({
-        logoUrl: publicUrl
+      logoUrl: publicUrl,
     });
 
     // LOG AKTIVITAS (Company Level)
@@ -201,95 +217,232 @@ router.post("/company-logo", verifyToken, async (req, res) => {
       actorName: user.nama || "Admin",
       target: user.idCompany,
       action: "UPDATE_LOGO",
-      description: `Admin ${user.nama || "Admin"} memperbarui logo perusahaan.`
+      description: `Admin ${user.nama || "Admin"} memperbarui logo perusahaan.`,
     });
 
-    return res.status(200).json({ 
-        message: "Logo perusahaan berhasil diperbarui.", 
-        logoPerusahaan: publicUrl 
+    return res.status(200).json({
+      message: "Logo perusahaan berhasil diperbarui.",
+      logoPerusahaan: publicUrl,
     });
-
   } catch (e) {
     console.error("Update Logo Error:", e);
-    return res.status(500).json({ 
-        message: "Gagal mengupload logo.", 
-        error: e.message 
+    return res.status(500).json({
+      message: "Gagal mengupload logo.",
+      error: e.message,
     });
   }
 });
-
-
 
 // =========================================================
 // USER PROFILE (ME)
 // =========================================================
 
-// 5. VIEW MY PROFILE
+// ---------------------------------------------------------
+// 1. GET MY PROFILE (Format Sesuai Request Legacy)
+// ---------------------------------------------------------
+// Endpoint: GET /api/user-profile
 router.get("/user-profile", verifyToken, async (req, res) => {
   try {
-    const userDoc = await db.collection("users").doc(req.user.email).get();
+    const email = req.user.email; // Ambil dari Token Middleware
 
-    if (!userDoc.exists)
-      return res.status(404).json({ message: "User not found" });
-
+    // 1. Ambil Data User
+    const userDoc = await db.collection("users").doc(email).get();
+    if (!userDoc.exists) {
+      return res.status(404).json({ message: "Data user tidak ditemukan." });
+    }
     const userData = userDoc.data();
-    // Hapus data sensitif
-    delete userData.otp;
-    delete userData.otpExpires;
 
-    return res.status(200).json(userData);
+    // 2. Ambil Data Company (Karena butuh Longitude/Latitude/Alamat Kantor)
+    let companyData = {};
+    if (userData.idCompany) {
+        const compDoc = await db.collection("companies").doc(userData.idCompany).get();
+        if (compDoc.exists) {
+            companyData = compDoc.data();
+        }
+    }
+
+    // 3. Logic Formatting Status
+    const statusString = `${userData.status ? userData.status.charAt(0).toUpperCase() + userData.status.slice(1) : "Inactive"} & ${userData.verified ? "Verified" : "Unverified"}`;
+
+    // 4. MAPPING DATA (Custom Format sesuai Request)
+    const formattedProfile = {
+      namaKaryawan: userData.username || "",
+      liked: "yes", 
+      alamatEmail: userData.alamatEmail || email,
+      noHP: userData.noTelp || null,
+      noWA: userData.noWA || null,
+      
+      // Data dari Collection Company
+      namaPerusahaan: userData.companyName || companyData.namaPerusahaan || "",
+      idPerusahaan: userData.idCompany || "",
+      alamatLongtitude: companyData.longitude ? companyData.longitude.toString() : "0.0",
+      alamatLatitude: companyData.latitude ? companyData.latitude.toString() : "0.0",
+      alamatLoc: userData.alamatLoc || companyData.alamatLoc || "", // Prioritas alamat user, fallback ke kantor
+      
+      foto: userData.photoURL || null,
+      
+      joinDate: userData.createdAt ? userData.createdAt.toDate().toISOString().split('.')[0] : new Date().toISOString().split('.')[0],
+      
+      status: statusString,
+      
+      fcmToken: userData.fcmToken || "ABC001K001", 
+      id: 1, 
+      idKaryawan: userData.uid || "", 
+      gender: userData.gender || "Male", 
+      jabatan: userData.role ? userData.role.charAt(0).toUpperCase() + userData.role.slice(1) : "Staff",
+      statusAds: "Free"
+    };
+
+    return res.status(200).json([formattedProfile]);
+
   } catch (e) {
-    return res.status(500).json({ message: "Error fetch user profile" });
+    console.error("Get User Profile Error:", e);
+    return res.status(500).json({ message: "Server Error" });
   }
 });
 
-// 6. EDIT MY PROFILE (TEXT DATA)
+// ---------------------------------------------------------
+// 2. UPDATE USER PROFILE (Data Teks)
+// ---------------------------------------------------------
+// Endpoint: PUT /api/user-profile
 router.put("/user-profile", verifyToken, async (req, res) => {
   try {
-    const { username, noTelp, noWA } = req.body;
     const email = req.user.email;
+    const { username, noTelp, noWA, alamatLoc } = req.body;
 
+    const userRef = db.collection("users").doc(email);
+    const userDoc = await userRef.get();
+
+    if (!userDoc.exists) {
+      return res.status(404).json({ message: "User tidak ditemukan." });
+    }
+
+    // Siapkan data update (Partial Update)
     const updateData = {};
     if (username) updateData.username = username;
     if (noTelp) updateData.noTelp = noTelp;
     if (noWA) updateData.noWA = noWA;
-    updateData.updatedAt = Timestamp.now();
+    if (alamatLoc) updateData.alamatLoc = alamatLoc; // User bisa punya alamat sendiri beda sama kantor
 
-    await db.collection("users").doc(email).update(updateData);
+    await userRef.update(updateData);
 
-    return res.status(200).json({ message: "Profil Anda berhasil diupdate" });
+    return res.status(200).json({
+      message: "Profil berhasil diperbarui.",
+      updatedFields: updateData
+    });
+
   } catch (e) {
-    return res.status(500).json({ message: "Gagal update profil" });
+    console.error("Update User Profile Error:", e);
+    return res.status(500).json({ message: "Server Error" });
   }
 });
 
-// 7. UPLOAD AVATAR (IMAGE DATA) - NEW!
+// ---------------------------------------------------------
+// 3. UPDATE USER PHOTO (Upload File)
+// ---------------------------------------------------------
+// Endpoint: POST /api/user-profile/photo
 router.post("/upload-avatar", verifyToken, async (req, res) => {
   try {
     const email = req.user.email;
+    const uid = req.user.uid || email; // Fallback UID
 
-    const publicUrl = await uploadFile(req, "avatars", (ext) => {
-      // Sanitasi email agar aman jadi nama file
-      const sanitizedEmail = email.replace(/[^a-zA-Z0-9]/g, "_");
-      return `${sanitizedEmail}_${Date.now()}${ext}`;
-    });
+    // Fungsi penamaan file unik: profile_UID_TIMESTAMP.jpg
+    const generateFileName = (fileExt) => {
+        const timestamp = Date.now();
+        // Bersihkan email dari karakter aneh jika dipakai sebagai ID
+        const cleanId = uid.replace(/[^a-zA-Z0-9]/g, ""); 
+        return `profile_${cleanId}_${timestamp}${fileExt}`;
+    };
 
+    // Panggil Helper uploadFile
+    // Folder di storage: 'user_profiles'
+    const publicUrl = await uploadFile(req, "user_profiles", generateFileName);
+
+    // Update URL di Firestore
     await db.collection("users").doc(email).update({
-      photoUrl: publicUrl,
-      updatedAt: Timestamp.now(),
+        photoURL: publicUrl
     });
 
-    return res.status(200).json({
-      message: "Foto profil berhasil diperbarui",
-      url: publicUrl,
+    return res.status(200).json({ 
+        message: "Foto profil berhasil diperbarui.", 
+        photoURL: publicUrl 
     });
+
   } catch (e) {
-    console.error(e);
-    return res
-      .status(500)
-      .json({ message: "Gagal upload gambar", error: e.message });
+    console.error("Update Photo Error:", e);
+    return res.status(500).json({ 
+        message: "Gagal mengupload foto.", 
+        error: e.message 
+    });
   }
 });
+
+// // 5. VIEW MY PROFILE
+// router.get("/user-profile", verifyToken, async (req, res) => {
+//   try {
+//     const userDoc = await db.collection("users").doc(req.user.email).get();
+
+//     if (!userDoc.exists)
+//       return res.status(404).json({ message: "User not found" });
+
+//     const userData = userDoc.data();
+//     // Hapus data sensitif
+//     delete userData.otp;
+//     delete userData.otpExpires;
+
+//     return res.status(200).json(userData);
+//   } catch (e) {
+//     return res.status(500).json({ message: "Error fetch user profile" });
+//   }
+// });
+
+// // 6. EDIT MY PROFILE (TEXT DATA)
+// router.put("/user-profile", verifyToken, async (req, res) => {
+//   try {
+//     const { username, noTelp, noWA } = req.body;
+//     const email = req.user.email;
+
+//     const updateData = {};
+//     if (username) updateData.username = username;
+//     if (noTelp) updateData.noTelp = noTelp;
+//     if (noWA) updateData.noWA = noWA;
+//     updateData.updatedAt = Timestamp.now();
+
+//     await db.collection("users").doc(email).update(updateData);
+
+//     return res.status(200).json({ message: "Profil Anda berhasil diupdate" });
+//   } catch (e) {
+//     return res.status(500).json({ message: "Gagal update profil" });
+//   }
+// });
+
+// // 7. UPLOAD AVATAR (IMAGE DATA) - NEW!
+// router.post("/upload-avatar", verifyToken, async (req, res) => {
+//   try {
+//     const email = req.user.email;
+
+//     const publicUrl = await uploadFile(req, "avatars", (ext) => {
+//       // Sanitasi email agar aman jadi nama file
+//       const sanitizedEmail = email.replace(/[^a-zA-Z0-9]/g, "_");
+//       return `${sanitizedEmail}_${Date.now()}${ext}`;
+//     });
+
+//     await db.collection("users").doc(email).update({
+//       photoUrl: publicUrl,
+//       updatedAt: Timestamp.now(),
+//     });
+
+//     return res.status(200).json({
+//       message: "Foto profil berhasil diperbarui",
+//       url: publicUrl,
+//     });
+//   } catch (e) {
+//     console.error(e);
+//     return res
+//       .status(500)
+//       .json({ message: "Gagal upload gambar", error: e.message });
+//   }
+// });
 
 // 8. CHANGE EMAIL (COMPLEX) - NEW!
 router.put("/change-email", verifyToken, async (req, res) => {
