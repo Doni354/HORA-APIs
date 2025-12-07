@@ -5,6 +5,7 @@ const { verifyToken } = require("../middleware/token");
 const { uploadFile } = require("../helper/uploadFile");
 const router = express.Router();
 const { Timestamp } = require("firebase-admin/firestore");
+const { logCompanyActivity } = require("../helper/logCompanyActivity");
 // =========================================================
 // EMPLOYEE MANAGEMENT
 // =========================================================
@@ -104,88 +105,120 @@ router.get("/company-profile", verifyToken, async (req, res) => {
   }
 });
 
-
-// // 2. VIEW COMPANY PROFILE
-// router.get("/company-profile", verifyToken, async (req, res) => {
-//   try {
-//     const companyId = req.user.idCompany;
-
-//     const companyDoc = await db.collection("companies").doc(companyId).get();
-//     if (!companyDoc.exists) {
-//       return res
-//         .status(404)
-//         .json({ message: "Data perusahaan tidak ditemukan" });
-//     }
-
-//     return res.status(200).json(companyDoc.data());
-//   } catch (e) {
-//     return res.status(500).json({ message: "Error fetch company profile" });
-//   }
-// });
-
-// // 3. EDIT COMPANY PROFILE (TEXT DATA)
-// router.put("/company-profile", verifyToken, async (req, res) => {
-//   try {
-//     if (req.user.role !== "admin") {
-//       return res.status(403).json({
-//         message: "Hanya Admin yang boleh mengedit profil perusahaan.",
-//       });
-//     }
-
-//     const { namaPerusahaan, alamatLoc, deskripsi } = req.body;
-//     const companyId = req.user.idCompany;
-
-//     await db
-//       .collection("companies")
-//       .doc(companyId)
-//       .update({
-//         namaPerusahaan: namaPerusahaan,
-//         alamatLoc: alamatLoc,
-//         deskripsi: deskripsi || "",
-//         updatedAt: Timestamp.now(),
-//         updatedBy: req.user.email,
-//       });
-
-//     return res
-//       .status(200)
-//       .json({ message: "Profil Perusahaan berhasil diupdate" });
-//   } catch (e) {
-//     return res.status(500).json({ message: "Gagal update profil perusahaan" });
-//   }
-// });
-
-// 4. UPLOAD COMPANY LOGO (IMAGE DATA) - NEW!
-router.post("/upload-company-logo", verifyToken, async (req, res) => {
+// ---------------------------------------------------------
+// 2. UPDATE DATA TEXT (Nama, Alamat, Telp, Koordinat)
+// ---------------------------------------------------------
+router.put("/company-profile", verifyToken, async (req, res) => {
   try {
-    const { role, idCompany } = req.user;
+    const user = req.user;
+    const { 
+        namaPerusahaan, 
+        alamatLoc, 
+        noTelp, 
+        noWA, 
+        alamatLatitude, 
+        alamatLongtitude 
+    } = req.body;
 
-    if (role !== "admin") {
-      return res
-        .status(403)
-        .json({ message: "Hanya Admin yang boleh mengganti logo perusahaan" });
+    // Security: Hanya Admin yang boleh edit
+    if (user.role !== "admin") {
+      return res.status(403).json({ message: "Hanya Admin yang boleh mengedit profil perusahaan." });
     }
 
-    const publicUrl = await uploadFile(req, "company_logos", (ext) => {
-      // Format nama file: IDCompany_Timestamp.ext
-      return `${idCompany}_${Date.now()}${ext}`;
+    if (!user.idCompany) {
+      return res.status(400).json({ message: "ID Company tidak valid." });
+    }
+
+    const companyRef = db.collection("companies").doc(user.idCompany);
+
+    // Siapkan object update (Hanya update field yang dikirim saja/Partial Update)
+    const updateData = {};
+    if (namaPerusahaan) updateData.namaPerusahaan = namaPerusahaan;
+    if (alamatLoc) updateData.alamatLoc = alamatLoc;
+    if (noTelp) updateData.noTelp = noTelp;
+    if (noWA) updateData.noWA = noWA;
+    if (alamatLatitude) updateData.latitude = alamatLatitude;      // Mapping ke field DB: latitude
+    if (alamatLongtitude) updateData.longitude = alamatLongtitude; // Mapping ke field DB: longitude
+
+    // Lakukan update
+    await companyRef.update(updateData);
+
+    // LOG AKTIVITAS (Company Level)
+    await logCompanyActivity(user.idCompany, {
+      actorEmail: user.email,
+      actorName: user.nama || "Admin",
+      target: user.idCompany,
+      action: "UPDATE_PROFILE",
+      description: `Admin ${user.nama || "Admin"} memperbarui profil perusahaan.`
     });
 
-    await db.collection("companies").doc(idCompany).update({
-      logoUrl: publicUrl,
-      updatedAt: Timestamp.now(),
+    return res.status(200).json({ 
+      message: "Data perusahaan berhasil diperbarui.",
+      updatedFields: updateData
     });
 
-    return res.status(200).json({
-      message: "Logo perusahaan berhasil diperbarui",
-      url: publicUrl,
-    });
   } catch (e) {
-    console.error(e);
-    return res
-      .status(500)
-      .json({ message: "Gagal upload logo", error: e.message });
+    console.error("Update Text Profile Error:", e);
+    return res.status(500).json({ message: "Server Error" });
   }
 });
+
+// ---------------------------------------------------------
+// 3. UPDATE LOGO PERUSAHAAN (Upload File)
+// ---------------------------------------------------------
+router.post("/company-logo", verifyToken, async (req, res) => {
+  try {
+    const user = req.user;
+
+    // Security: Hanya Admin
+    if (user.role !== "admin") {
+      return res.status(403).json({ message: "Hanya Admin yang boleh mengubah logo." });
+    }
+
+    if (!user.idCompany) {
+      return res.status(400).json({ message: "ID Company tidak valid." });
+    }
+
+    // Fungsi penamaan file unik
+    // Format: logo_IDCOMPANY_TIMESTAMP.jpg
+    const generateFileName = (fileExt) => {
+        const timestamp = Date.now();
+        return `logo_${user.idCompany}_${timestamp}${fileExt}`;
+    };
+
+    // Panggil Helper uploadFile
+    // Folder di storage: 'company_logos'
+    const publicUrl = await uploadFile(req, "company_logos", generateFileName);
+
+    // Update URL Logo di Firestore
+    await db.collection("companies").doc(user.idCompany).update({
+        logoUrl: publicUrl
+    });
+
+    // LOG AKTIVITAS (Company Level)
+    await logCompanyActivity(user.idCompany, {
+      actorEmail: user.email,
+      actorName: user.nama || "Admin",
+      target: user.idCompany,
+      action: "UPDATE_LOGO",
+      description: `Admin ${user.nama || "Admin"} memperbarui logo perusahaan.`
+    });
+
+    return res.status(200).json({ 
+        message: "Logo perusahaan berhasil diperbarui.", 
+        logoPerusahaan: publicUrl 
+    });
+
+  } catch (e) {
+    console.error("Update Logo Error:", e);
+    return res.status(500).json({ 
+        message: "Gagal mengupload logo.", 
+        error: e.message 
+    });
+  }
+});
+
+
 
 // =========================================================
 // USER PROFILE (ME)

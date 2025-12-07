@@ -605,13 +605,11 @@ router.post("/send-invite", verifyToken, async (req, res) => {
       console.error("Send Invite Error:", e);
       return res.status(500).json({ message: "Server Error" });
     }
-  });
-  
-  
+});
   // ---------------------------------------------------------
   // 2. TERIMA UNDANGAN (User Login Google + Input Data)
   // ---------------------------------------------------------
-  router.post("/accept-invite", async (req, res) => {
+router.post("/accept-invite", async (req, res) => {
     try {
       const { idToken, inviteCode, noTelp, noWA } = req.body;
   
@@ -711,8 +709,8 @@ router.post("/send-invite", verifyToken, async (req, res) => {
       console.error("Accept Invite Error:", e);
       return res.status(500).json({ message: "Server Error" });
     }
-  });
-  
+});
+
   // ---------------------------------------------------------
 // 1. GET INFO PERUSAHAAN (Public - Tanpa Token)
 // ---------------------------------------------------------
@@ -738,8 +736,8 @@ router.get("/apply-company/:idCompany", async (req, res) => {
     } catch (e) {
       return res.status(500).json({ message: "Server Error" });
     }
-  });
-  
+});
+
 // ---------------------------------------------------------
 // 2. SUBMIT LAMARAN (User Login Google -> Jadi Candidate)
 // ---------------------------------------------------------
@@ -841,7 +839,7 @@ router.post("/apply", async (req, res) => {
       console.error("Public Join Error:", e);
       return res.status(500).json({ message: "Server Error" });
     }
-  });
+});
 
 // ---------------------------------------------------------
 // 3. GET PUBLIC JOIN LINK (Untuk Admin Share) - NEW!
@@ -869,4 +867,6 @@ router.get("/public-link", verifyToken, async (req, res) => {
       return res.status(500).json({ message: "Server Error" });
     }
   });
+
+  
 module.exports = router;
