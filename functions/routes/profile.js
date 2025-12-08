@@ -178,61 +178,80 @@ router.put("/company-profile", verifyToken, async (req, res) => {
 });
 
 // ---------------------------------------------------------
-// 3. UPDATE LOGO PERUSAHAAN (Upload File)
+// 3. UPDATE LOGO PERUSAHAAN (Upload + Delete Old)
 // ---------------------------------------------------------
 router.post("/company-logo", verifyToken, async (req, res) => {
   try {
     const user = req.user;
 
-    // Security: Hanya Admin
     if (user.role !== "admin") {
-      return res
-        .status(403)
-        .json({ message: "Hanya Admin yang boleh mengubah logo." });
+      return res.status(403).json({ message: "Hanya Admin yang boleh mengubah logo." });
     }
 
     if (!user.idCompany) {
       return res.status(400).json({ message: "ID Company tidak valid." });
     }
 
-    // Fungsi penamaan file unik
-    // Format: logo_IDCOMPANY_TIMESTAMP.jpg
+    // A. Ambil Data Lama Dulu
+    const companyRef = db.collection("companies").doc(user.idCompany);
+    const companyDoc = await companyRef.get();
+    const oldLogoUrl = companyDoc.exists ? companyDoc.data().logoUrl : null;
+
+    // B. Upload File Baru
     const generateFileName = (fileExt) => {
-      const timestamp = Date.now();
-      return `logo_${user.idCompany}_${timestamp}${fileExt}`;
+        const timestamp = Date.now();
+        return `logo_${user.idCompany}_${timestamp}${fileExt}`;
     };
 
-    // Panggil Helper uploadFile
-    // Folder di storage: 'company_logos'
+    // Upload ke folder 'company_logos'
     const publicUrl = await uploadFile(req, "company_logos", generateFileName);
 
-    // Update URL Logo di Firestore
-    await db.collection("companies").doc(user.idCompany).update({
-      logoUrl: publicUrl,
+    // C. Hapus File Lama (Jika Ada)
+    if (oldLogoUrl) {
+        try {
+            // Cek apakah URL-nya dari storage kita (bukan link external sembarang)
+            // Format URL: https://storage.googleapis.com/BUCKET_NAME/FOLDER/FILE
+            if (oldLogoUrl.includes("storage.googleapis.com")) {
+                // Ambil path file dari URL
+                // Kita split berdasarkan nama bucket agar aman
+                const filePath = oldLogoUrl.split(`/${bucket.name}/`)[1];
+                if (filePath) {
+                    await bucket.file(decodeURIComponent(filePath)).delete();
+                    console.log("Deleted old logo:", filePath);
+                }
+            }
+        } catch (err) {
+            console.error("Gagal menghapus logo lama (abaikan):", err.message);
+            // Jangan throw error, biarkan proses update lanjut
+        }
+    }
+
+    // D. Update URL Baru di Firestore
+    await companyRef.update({
+        logoUrl: publicUrl
     });
 
-    // LOG AKTIVITAS (Company Level)
     await logCompanyActivity(user.idCompany, {
       actorEmail: user.email,
       actorName: user.nama || "Admin",
       target: user.idCompany,
       action: "UPDATE_LOGO",
-      description: `Admin ${user.nama || "Admin"} memperbarui logo perusahaan.`,
+      description: `Admin ${user.nama || "Admin"} memperbarui logo perusahaan.`
     });
 
-    return res.status(200).json({
-      message: "Logo perusahaan berhasil diperbarui.",
-      logoPerusahaan: publicUrl,
+    return res.status(200).json({ 
+        message: "Logo perusahaan berhasil diperbarui.", 
+        logoPerusahaan: publicUrl 
     });
+
   } catch (e) {
     console.error("Update Logo Error:", e);
-    return res.status(500).json({
-      message: "Gagal mengupload logo.",
-      error: e.message,
+    return res.status(500).json({ 
+        message: "Gagal mengupload logo.", 
+        error: e.message 
     });
   }
 });
-
 // =========================================================
 // USER PROFILE (ME)
 // =========================================================
@@ -338,28 +357,47 @@ router.put("/user-profile", verifyToken, async (req, res) => {
 });
 
 // ---------------------------------------------------------
-// 3. UPDATE USER PHOTO (Upload File)
+// 3. UPDATE USER PHOTO (Upload + Delete Old)
 // ---------------------------------------------------------
-// Endpoint: POST /api/user-profile/photo
 router.post("/upload-avatar", verifyToken, async (req, res) => {
   try {
     const email = req.user.email;
-    const uid = req.user.uid || email; // Fallback UID
+    const uid = req.user.uid || email;
 
-    // Fungsi penamaan file unik: profile_UID_TIMESTAMP.jpg
+    // A. Ambil Data Lama
+    const userRef = db.collection("users").doc(email);
+    const userDoc = await userRef.get();
+    const oldPhotoUrl = userDoc.exists ? userDoc.data().photoURL : null;
+
+    // B. Upload Foto Baru
     const generateFileName = (fileExt) => {
         const timestamp = Date.now();
-        // Bersihkan email dari karakter aneh jika dipakai sebagai ID
         const cleanId = uid.replace(/[^a-zA-Z0-9]/g, ""); 
         return `profile_${cleanId}_${timestamp}${fileExt}`;
     };
 
-    // Panggil Helper uploadFile
-    // Folder di storage: 'user_profiles'
+    // Upload ke folder 'user_profiles'
     const publicUrl = await uploadFile(req, "user_profiles", generateFileName);
 
-    // Update URL di Firestore
-    await db.collection("users").doc(email).update({
+    // C. Hapus Foto Lama (Jika Ada dan BUKAN FOTO GOOGLE)
+    if (oldPhotoUrl) {
+        try {
+            // PENTING: Hanya hapus jika file ada di bucket kita
+            // Jangan hapus jika URL-nya 'lh3.googleusercontent.com' (Foto bawaan Gmail)
+            if (oldPhotoUrl.includes("storage.googleapis.com")) {
+                const filePath = oldPhotoUrl.split(`/${bucket.name}/`)[1];
+                if (filePath) {
+                    await bucket.file(decodeURIComponent(filePath)).delete();
+                    console.log("Deleted old user photo:", filePath);
+                }
+            }
+        } catch (err) {
+            console.error("Gagal menghapus foto lama (abaikan):", err.message);
+        }
+    }
+
+    // D. Update URL di Firestore
+    await userRef.update({
         photoURL: publicUrl
     });
 
@@ -377,72 +415,10 @@ router.post("/upload-avatar", verifyToken, async (req, res) => {
   }
 });
 
-// // 5. VIEW MY PROFILE
-// router.get("/user-profile", verifyToken, async (req, res) => {
-//   try {
-//     const userDoc = await db.collection("users").doc(req.user.email).get();
 
-//     if (!userDoc.exists)
-//       return res.status(404).json({ message: "User not found" });
-
-//     const userData = userDoc.data();
-//     // Hapus data sensitif
-//     delete userData.otp;
-//     delete userData.otpExpires;
-
-//     return res.status(200).json(userData);
-//   } catch (e) {
-//     return res.status(500).json({ message: "Error fetch user profile" });
-//   }
-// });
-
-// // 6. EDIT MY PROFILE (TEXT DATA)
-// router.put("/user-profile", verifyToken, async (req, res) => {
-//   try {
-//     const { username, noTelp, noWA } = req.body;
-//     const email = req.user.email;
-
-//     const updateData = {};
-//     if (username) updateData.username = username;
-//     if (noTelp) updateData.noTelp = noTelp;
-//     if (noWA) updateData.noWA = noWA;
-//     updateData.updatedAt = Timestamp.now();
-
-//     await db.collection("users").doc(email).update(updateData);
-
-//     return res.status(200).json({ message: "Profil Anda berhasil diupdate" });
-//   } catch (e) {
-//     return res.status(500).json({ message: "Gagal update profil" });
-//   }
-// });
-
-// // 7. UPLOAD AVATAR (IMAGE DATA) - NEW!
-// router.post("/upload-avatar", verifyToken, async (req, res) => {
-//   try {
-//     const email = req.user.email;
-
-//     const publicUrl = await uploadFile(req, "avatars", (ext) => {
-//       // Sanitasi email agar aman jadi nama file
-//       const sanitizedEmail = email.replace(/[^a-zA-Z0-9]/g, "_");
-//       return `${sanitizedEmail}_${Date.now()}${ext}`;
-//     });
-
-//     await db.collection("users").doc(email).update({
-//       photoUrl: publicUrl,
-//       updatedAt: Timestamp.now(),
-//     });
-
-//     return res.status(200).json({
-//       message: "Foto profil berhasil diperbarui",
-//       url: publicUrl,
-//     });
-//   } catch (e) {
-//     console.error(e);
-//     return res
-//       .status(500)
-//       .json({ message: "Gagal upload gambar", error: e.message });
-//   }
-// });
+// =========================================================
+// USER PROFILE Optional
+// =========================================================
 
 // 8. CHANGE EMAIL (COMPLEX) - NEW!
 router.put("/change-email", verifyToken, async (req, res) => {

@@ -8,6 +8,7 @@ const loginRoutes = require("./routes/login");
 const absensiRoutes = require("./routes/absensi");
 const profileRoutes = require("./routes/profile");
 const companyRoutes = require("./routes/company");
+const berkasRoutes = require("./routes/berkas");
 
 // ---------------------------------------------------------
 // Cloud Functions Global Config
@@ -32,6 +33,7 @@ app.use("/api/login", loginRoutes);
 app.use("/api/absensi", absensiRoutes);
 app.use("/api/profile", profileRoutes);
 app.use("/api/company", companyRoutes);
+app.use("/api/berkas", berkasRoutes);
 // ---------------------------------------------------------
 // TEST
 // ---------------------------------------------------------
