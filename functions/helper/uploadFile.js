@@ -1,11 +1,9 @@
 /* eslint-disable */
-/* eslint-disable */
-require('dotenv').config();
+require("dotenv").config();
 const express = require("express");
 const Busboy = require("busboy");
 const path = require("path");
 const { bucket } = require("../config/firebase");
-
 
 const uploadFile = (req, folderName, fileNameFunc) => {
   return new Promise((resolve, reject) => {
@@ -14,19 +12,19 @@ const uploadFile = (req, folderName, fileNameFunc) => {
     let fileMime = null;
     let fileExt = null;
 
-    busboy.on('file', (name, file, info) => {
+    busboy.on("file", (name, file, info) => {
       const { filename, mimeType } = info;
       fileMime = mimeType;
       fileExt = path.extname(filename);
-      
+
       const chunks = [];
-      file.on('data', (data) => chunks.push(data));
-      file.on('end', () => {
+      file.on("data", (data) => chunks.push(data));
+      file.on("end", () => {
         fileBuffer = Buffer.concat(chunks);
       });
     });
 
-    busboy.on('finish', async () => {
+    busboy.on("finish", async () => {
       if (!fileBuffer) return reject(new Error("Tidak ada file yang diupload"));
 
       try {
@@ -36,9 +34,9 @@ const uploadFile = (req, folderName, fileNameFunc) => {
 
         await fileRef.save(fileBuffer, {
           metadata: { contentType: fileMime },
-          public: true 
+          public: true,
         });
-        
+
         const publicUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
         resolve(publicUrl);
       } catch (e) {
