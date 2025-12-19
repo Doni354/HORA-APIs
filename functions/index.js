@@ -11,6 +11,7 @@ const companyRoutes = require("./routes/company");
 const berkasRoutes = require("./routes/berkas");
 const izinRoutes = require("./routes/izin");
 const kontakRoutes = require("./routes/kontak");
+const arsipRoutes = require("./routes/arsip");
 
 // ---------------------------------------------------------
 // Cloud Functions Global Config
@@ -37,6 +38,7 @@ app.use("/api/company", companyRoutes);
 app.use("/api/berkas", berkasRoutes);
 app.use("/api/izin", izinRoutes);
 app.use("/api/kontak", kontakRoutes);
+app.use("/api/arsip", arsipRoutes);
 // ---------------------------------------------------------
 // TEST
 // ---------------------------------------------------------

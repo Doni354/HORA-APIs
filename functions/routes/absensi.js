@@ -76,6 +76,81 @@ router.get("/HomeA", async (req, res) => {
 })
 
 // ---------------------------------------------------------
+// GET /absensi/indie - Individual View Absensi
+// ---------------------------------------------------------
+router.get("/indie", async (req, res) => {
+  try {
+    const idkaryawan = req.query.idkaryawan
+    const tglstart = req.query.tglstart
+    const tglend = req.query.tglend
+
+    if (!idkaryawan) {
+      return res.status(400).json({ message: "idkaryawan wajib diisi" })
+    }
+
+    if (!tglstart || !tglend) {
+      return res.status(400).json({ message: "tglstart dan tglend wajib diisi (format YYYY-MM-DD)" })
+    }
+
+    const startDate = new Date(tglstart)
+    const endDate = new Date(tglend)
+    // Set endDate to end of the day to ensure full coverage if needed, 
+    // or keep strictly as provided if time component is included in input.
+    // Assuming standard date string "YYYY-MM-DD" which defaults to 00:00:00.
+    // Ideally, endDate should probably cover the full day.
+    // endDate.setHours(23, 59, 59, 999); 
+
+    // Query absensi records for specific employee
+    const snapshot = await db
+      .collection("absensi")
+      .where("idKaryawan", "==", idkaryawan)
+      .where("tanggal", ">=", startDate)
+      .where("tanggal", "<=", endDate)
+      .get()
+
+    if (snapshot.empty) {
+      return res.status(200).json([])
+    }
+
+    const absensiData = snapshot.docs.map((doc) => {
+      const data = doc.data()
+      // Mapping response to match the requested format
+      return {
+        idKaryawan: data.idKaryawan,
+        namaKaryawan: data.namaKaryawan,
+        tanggal: data.tanggal, // Firestore Timestamp or Date
+        waktuCheckIn: data.waktuCheckIn,
+        waktuCheckOut: data.waktuCheckOut || null,
+        bluetoothID: data.bluetoothID || null,
+        alamatLongtitude: data.alamatLongtitude,
+        alamatLatitude: data.alamatLatitude,
+        alamatLoc: data.alamatLoc,
+        telat: data.telat || null,
+        id: doc.id,
+        foto: null, // Placeholder based on example request
+        fotoKaryawan: data.fotoCheckIn || null, // Mapping CheckIn photo to fotoKaryawan
+        idPerusahaan: data.idPerusahaan,
+        namaperusahaan: data.namaPerusahaan,
+        tanggalAbsensi: data.tanggal,
+        fotoPulang: data.fotoCheckOut || null,
+        latitudePulang: data.latitudeCheckOut || null,
+        longtitudePulang: data.longtitudeCheckOut || null,
+        durasi: data.durasi || null,
+        alamatPulang: data.alamatLocCheckOut || null
+      }
+    })
+
+    return res.status(200).json(absensiData)
+  } catch (e) {
+    console.error("Get Individual Absensi error:", e)
+    return res.status(500).json({
+      message: "Gagal mengambil data absensi individu",
+      error: e.message,
+    })
+  }
+})
+
+// ---------------------------------------------------------
 // POST /absensi - Check In Absensi
 // ---------------------------------------------------------
 router.post("/", (req, res) => {
