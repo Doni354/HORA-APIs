@@ -166,7 +166,6 @@ router.get("/verifyOTP", async (req, res) => {
   }
 });
 
-
 const crypto = require("crypto");
 
 // ---------------------------------------------------------
@@ -174,14 +173,18 @@ const crypto = require("crypto");
 // ---------------------------------------------------------
 router.post("/login-google", async (req, res) => {
   try {
-    const { idToken } = req.body;
-    if (!idToken) return res.status(400).json({ message: "Google ID Token diperlukan." });
-
+    const { idToken, deviceId} = req.body;
+    if (!idToken)
+      return res.status(400).json({ message: "Google ID Token diperlukan." });
+    // Validasi Device ID (Wajib ada biar fitur single session jalan)
+    if (!deviceId) return res.status(400).json({ message: "Device ID diperlukan untuk keamanan." });
     // 1. Verifikasi Token Google
     let decodedToken;
     try {
       // Pastikan token bersih dari spasi
-      decodedToken = await admin.auth().verifyIdToken(idToken.toString().trim());
+      decodedToken = await admin
+        .auth()
+        .verifyIdToken(idToken.toString().trim());
     } catch (error) {
       return res.status(401).json({ message: "Sesi Google tidak valid." });
     }
@@ -192,7 +195,9 @@ router.post("/login-google", async (req, res) => {
 
     // 2. Cek User Terdaftar
     if (!userDoc.exists) {
-      return res.status(404).json({ message: "Akun tidak ditemukan. Silakan registrasi dulu." });
+      return res
+        .status(404)
+        .json({ message: "Akun tidak ditemukan. Silakan registrasi dulu." });
     }
 
     const data = userDoc.data();
@@ -200,20 +205,26 @@ router.post("/login-google", async (req, res) => {
     // ------------------------------------------------------------------
     // TAHAP 1: CEK STATUS & ROLE TERLEBIH DAHULU (PRIORITAS UTAMA)
     // ------------------------------------------------------------------
-    
+
     // Cek Status Akun (Inactive/Banned)
     if (data.status === "inactive" || data.status === "banned") {
-      return res.status(403).json({ message: "Akun dinonaktifkan oleh sistem." });
+      return res
+        .status(403)
+        .json({ message: "Akun dinonaktifkan oleh sistem." });
     }
 
     // Cek Role Candidate (Masih Menunggu)
     if (data.role === "candidate") {
-      return res.status(403).json({ message: "Akun sedang menunggu persetujuan Admin." });
+      return res
+        .status(403)
+        .json({ message: "Akun sedang menunggu persetujuan Admin." });
     }
 
     // Cek Role Rejected (Ditolak)
     if (data.role === "rejected") {
-      return res.status(403).json({ message: "Lamaran Anda ditolak, silakan daftar kembali." });
+      return res
+        .status(403)
+        .json({ message: "Lamaran Anda ditolak, silakan daftar kembali." });
     }
 
     // ------------------------------------------------------------------
@@ -221,34 +232,37 @@ router.post("/login-google", async (req, res) => {
     // ------------------------------------------------------------------
     // Kode ini hanya akan dieksekusi jika user BUKAN candidate/rejected/banned
     if (data.verified === false) {
-      
       // --- UPDATE: CEK COOLDOWN PENGIRIMAN EMAIL ---
-      const lastSent = data.lastVerifyEmailSentAt ? data.lastVerifyEmailSentAt.toMillis() : 0;
+      const lastSent = data.lastVerifyEmailSentAt
+        ? data.lastVerifyEmailSentAt.toMillis()
+        : 0;
       const now = Date.now();
       const cooldownMs = 5 * 60 * 1000; // 5 Menit (dalam milidetik)
 
       // Jika belum 5 menit sejak pengiriman terakhir, tolak request pengiriman baru
       if (now - lastSent < cooldownMs) {
         // Hitung sisa waktu (untuk info debug/frontend)
-        const remainingSeconds = Math.ceil((cooldownMs - (now - lastSent)) / 1000);
-        
+        const remainingSeconds = Math.ceil(
+          (cooldownMs - (now - lastSent)) / 1000
+        );
+
         return res.status(403).json({
           message: "Akun belum diverifikasi.",
           error: "EMAIL_COOLDOWN", // Error code khusus biar FE tau
           info: `Email verifikasi sudah dikirim. Harap tunggu ${remainingSeconds} detik sebelum meminta ulang.`,
-          remainingSeconds: remainingSeconds
+          remainingSeconds: remainingSeconds,
         });
       }
 
       // A. Generate Token Verifikasi Baru
-      const verifyToken = crypto.randomBytes(20).toString("hex"); 
+      const verifyToken = crypto.randomBytes(20).toString("hex");
       const tokenExpires = Date.now() + 3600000; // 1 Jam
 
       // B. Update DB (Simpan Token & Timestamp Pengiriman)
       await userRef.update({
         verifyToken: verifyToken,
         verifyTokenExpires: tokenExpires,
-        lastVerifyEmailSentAt: Timestamp.now() // <--- Simpan waktu kirim
+        lastVerifyEmailSentAt: Timestamp.now(), // <--- Simpan waktu kirim
       });
 
       // C. Kirim Email
@@ -271,24 +285,30 @@ router.post("/login-google", async (req, res) => {
       return res.status(403).json({
         message: "Akun belum diverifikasi.",
         error: "EMAIL_NOT_VERIFIED",
-        info: "Email verifikasi baru saja dikirim. Silakan cek inbox/spam."
+        info: "Email verifikasi baru saja dikirim. Silakan cek inbox/spam.",
       });
     }
 
     // ------------------------------------------------------------------
     // TAHAP 3: LOLOS SEMUA -> GENERATE JWT
     // ------------------------------------------------------------------
+    // Saat Login Berhasil:
     const tokenPayload = {
       id: email,
       role: data.role,
       idCompany: data.idCompany,
       status: data.status,
+      deviceId: deviceId // <--- TAMBAHAN PENTING! Masukkan ini ke dalam token
     };
-
+    
+    // Jadi nanti isi tokennya: { id: "...", deviceId: "HP_Samsung_A", ... }
     const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: "30d" });
-
-    // Update lastLogin
-    await userRef.update({ lastLogin: Timestamp.now() });
+    
+    // Update DB: User ini sekarang "milik" deviceId ini
+    await userRef.update({ 
+        lastLogin: Timestamp.now(),
+        currentDeviceId: deviceId 
+    });
 
     return res.status(200).json({
       message: "Login Berhasil",
@@ -296,10 +316,9 @@ router.post("/login-google", async (req, res) => {
       user: {
         email: email,
         role: data.role,
-        nama: data.username
+        nama: data.username,
       },
     });
-
   } catch (e) {
     console.error("Login Error:", e);
     return res.status(500).json({ message: "Server Error" });
@@ -328,12 +347,18 @@ router.get("/confirm-email", async (req, res) => {
 
     // 1. Validasi Token
     if (data.verifyToken !== token) {
-      return res.status(400).send("Link verifikasi salah atau sudah tidak valid.");
+      return res
+        .status(400)
+        .send("Link verifikasi salah atau sudah tidak valid.");
     }
 
     // 2. Validasi Expired
     if (data.verifyTokenExpires < Date.now()) {
-      return res.status(400).send("Link verifikasi sudah kadaluarsa. Silakan login ulang untuk minta link baru.");
+      return res
+        .status(400)
+        .send(
+          "Link verifikasi sudah kadaluarsa. Silakan login ulang untuk minta link baru."
+        );
     }
 
     // 3. Sukses -> Update User jadi Verified
@@ -341,7 +366,7 @@ router.get("/confirm-email", async (req, res) => {
     await userRef.update({
       verified: true,
       verifyToken: admin.firestore.FieldValue.delete(),
-      verifyTokenExpires: admin.firestore.FieldValue.delete()
+      verifyTokenExpires: admin.firestore.FieldValue.delete(),
     });
 
     // 4. Tampilkan Halaman HTML sederhana
@@ -354,7 +379,6 @@ router.get("/confirm-email", async (req, res) => {
         </body>
       </html>
     `);
-
   } catch (e) {
     console.error("Confirm Email Error:", e);
     res.status(500).send("Terjadi kesalahan server.");
@@ -364,7 +388,7 @@ router.get("/confirm-email", async (req, res) => {
 // Helper Function: Membuat kode acak
 // Kita hindari huruf 'I', 'O' dan angka '0', '1' agar tidak membingungkan user
 function generateCompanyCode(length = 6) {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; 
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let result = "";
   for (let i = 0; i < length; i++) {
     result += chars.charAt(Math.floor(Math.random() * chars.length));
@@ -377,17 +401,20 @@ function generateCompanyCode(length = 6) {
 // ---------------------------------------------------------
 router.post("/registrasi", async (req, res) => {
   // LOG PERTAMA: Membuktikan request masuk ke kode ini
-  console.log(">>> [START] Request Registrasi Masuk!"); 
+  console.log(">>> [START] Request Registrasi Masuk!");
 
   try {
     let idToken = "";
 
     // CARA 1: Cek Authorization Header (Standar API - Recommended)
     // Format: "Bearer eyJhbGci..."
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+    if (
+      req.headers.authorization &&
+      req.headers.authorization.startsWith("Bearer ")
+    ) {
       console.log(">>> Token ditemukan di Header");
-      idToken = req.headers.authorization.split('Bearer ')[1];
-    } 
+      idToken = req.headers.authorization.split("Bearer ")[1];
+    }
     // CARA 2: Cek Body (Backup)
     else if (req.body.idToken) {
       console.log(">>> Token ditemukan di Body");
@@ -401,7 +428,7 @@ router.post("/registrasi", async (req, res) => {
       console.log(">>> GAGAL: Data tidak lengkap");
       return res.status(400).json({
         message: "Data tidak lengkap. Token atau field lain kosong.",
-        received: { tokenExists: !!idToken, namaPerusahaan, alamatLoc }
+        received: { tokenExists: !!idToken, namaPerusahaan, alamatLoc },
       });
     }
 
@@ -416,13 +443,13 @@ router.post("/registrasi", async (req, res) => {
     } catch (error) {
       console.error(">>> GAGAL VERIFIKASI:", error);
       // PENTING: Return error detail biar kita tau salahnya dimana
-      return res.status(401).json({ 
+      return res.status(401).json({
         message: "TOKEN DITOLAK FIREBASE",
         debug_info: {
-            error_code: error.code,
-            error_message: error.message,
-            token_snippet: tokenClean.substring(0, 10) + "..." // Cek apakah tokennya kebaca
-        }
+          error_code: error.code,
+          error_message: error.message,
+          token_snippet: tokenClean.substring(0, 10) + "...", // Cek apakah tokennya kebaca
+        },
       });
     }
 
@@ -439,13 +466,14 @@ router.post("/registrasi", async (req, res) => {
 
     while (!isUnique && attempt < 5) {
       const randomCode = generateCompanyCode(5);
-      idCompany = `C${randomCode}`; 
+      idCompany = `C${randomCode}`;
       const checkDoc = await db.collection("companies").doc(idCompany).get();
       if (!checkDoc.exists) isUnique = true;
       attempt++;
     }
 
-    if (!isUnique) return res.status(500).json({ message: "Gagal generate ID Perusahaan." });
+    if (!isUnique)
+      return res.status(500).json({ message: "Gagal generate ID Perusahaan." });
 
     // Transaction Firestore
     await db.runTransaction(async (transaction) => {
@@ -455,16 +483,31 @@ router.post("/registrasi", async (req, res) => {
       if (userDoc.exists) throw new Error("USER_EXISTS");
 
       const companyRef = db.collection("companies").doc(idCompany);
-      
+
       const companyData = {
-        idCompany, namaPerusahaan, alamatLoc, totalLike: 0,
-        createdAt: Timestamp.now(), createdBy: email, ownerUid: uid,
+        idCompany,
+        namaPerusahaan,
+        alamatLoc,
+        totalLike: 0,
+        createdAt: Timestamp.now(),
+        createdBy: email,
+        ownerUid: uid,
       };
 
       const userData = {
-        uid, username, alamatEmail: email, photoURL, noTelp, noWA: noWA || noTelp,
-        role: "admin", idCompany, companyName: namaPerusahaan,
-        createdAt: Timestamp.now(), status: "active", verified: false, authProvider: "google"
+        uid,
+        username,
+        alamatEmail: email,
+        photoURL,
+        noTelp,
+        noWA: noWA || noTelp,
+        role: "admin",
+        idCompany,
+        companyName: namaPerusahaan,
+        createdAt: Timestamp.now(),
+        status: "active",
+        verified: false,
+        authProvider: "google",
       };
 
       transaction.set(companyRef, companyData);
@@ -475,22 +518,23 @@ router.post("/registrasi", async (req, res) => {
     // Karena ini adalah "Event Pertama" dari perusahaan (Pendaftaran),
     // Kita catat bahwa Admin ini yang mendirikannya.
     await logCompanyActivity(idCompany, {
-        actorEmail: email,
-        actorName: username,
-        target: idCompany,
-        action: "REGISTER_COMPANY",
-        description: `User ${username} mendaftarkan perusahaan baru: ${namaPerusahaan}`
+      actorEmail: email,
+      actorName: username,
+      target: idCompany,
+      action: "REGISTER_COMPANY",
+      description: `User ${username} mendaftarkan perusahaan baru: ${namaPerusahaan}`,
     });
 
     return res.status(200).json({
       message: "Registrasi Berhasil",
-      data: { companyCode: idCompany, companyName: namaPerusahaan }
+      data: { companyCode: idCompany, companyName: namaPerusahaan },
     });
-
   } catch (e) {
     console.error(">>> SERVER ERROR:", e);
     if (e.message === "USER_EXISTS") {
-      return res.status(400).json({ message: "Email ini sudah terdaftar sebagai user lain." });
+      return res
+        .status(400)
+        .json({ message: "Email ini sudah terdaftar sebagai user lain." });
     }
     return res.status(500).json({
       message: "Server Error",
@@ -511,7 +555,8 @@ router.post("/register-employee", async (req, res) => {
     // A. Validasi Input Dasar
     if (!idToken || !idCompany || !noTelp) {
       return res.status(400).json({
-        message: "Data tidak lengkap. Harap sertakan Google Token, ID Company, dan No Telepon.",
+        message:
+          "Data tidak lengkap. Harap sertakan Google Token, ID Company, dan No Telepon.",
       });
     }
 
@@ -522,7 +567,9 @@ router.post("/register-employee", async (req, res) => {
       decodedToken = await admin.auth().verifyIdToken(idToken);
     } catch (error) {
       console.error("Token verification failed:", error);
-      return res.status(401).json({ message: "Sesi Google tidak valid atau kadaluarsa." });
+      return res
+        .status(401)
+        .json({ message: "Sesi Google tidak valid atau kadaluarsa." });
     }
 
     // Ambil data user dari hasil decode token
@@ -548,7 +595,8 @@ router.post("/register-employee", async (req, res) => {
       // Jika user sudah terdaftar sebagai pegawai aktif atau admin, tolak
       if (["admin", "staff", "employee"].includes(data.role)) {
         return res.status(400).json({
-          message: "Email akun Google ini sudah terdaftar sebagai pegawai aktif.",
+          message:
+            "Email akun Google ini sudah terdaftar sebagai pegawai aktif.",
         });
       }
 
@@ -562,20 +610,20 @@ router.post("/register-employee", async (req, res) => {
 
     // 4. Simpan / Update Data User
     const userData = {
-      uid: uid,             // Simpan UID firebase auth juga
-      username: username,   // Dari Google
-      alamatEmail: email,   // Dari Google (pasti valid)
-      photoURL: photoURL,   // Dari Google
-      noTelp: noTelp,       // Dari Form
+      uid: uid, // Simpan UID firebase auth juga
+      username: username, // Dari Google
+      alamatEmail: email, // Dari Google (pasti valid)
+      photoURL: photoURL, // Dari Google
+      noTelp: noTelp, // Dari Form
       noWa: noWa || noTelp, // Dari Form (jika kosong, samakan dgn noTelp)
       idCompany: idCompany,
       companyName: companyName,
-      role: "candidate",       // Tetap candidate
+      role: "candidate", // Tetap candidate
       status: "pending_approval",
       createdAt: Timestamp.now(),
-      
-      // Karena login pakai Google, email otomatis verified. 
-      // Tapi 'verified' di sini mungkin maksudmu 'verified by company admin'. 
+
+      // Karena login pakai Google, email otomatis verified.
+      // Tapi 'verified' di sini mungkin maksudmu 'verified by company admin'.
       // Jadi biarkan false atau sesuaikan logika aplikasimu.
       verified: false, // Saran: True karena email google pasti asli. Tinggal approval admin company.
       authProvider: "google", // Penanda login pakai google
@@ -587,14 +635,12 @@ router.post("/register-employee", async (req, res) => {
     return res.status(200).json({
       message: "Pendaftaran berhasil dikirim",
       info: "Silakan hubungi Admin perusahaan untuk konfirmasi akun Anda.",
-      user: { email, username, role: "candidate" } // Opsional: kembalikan data user
+      user: { email, username, role: "candidate" }, // Opsional: kembalikan data user
     });
-
   } catch (e) {
     console.error("Reg Employee Error:", e);
     return res.status(500).json({ message: "Server Error" });
   }
 });
-
 
 module.exports = router;

@@ -3,9 +3,8 @@
 // Load environment variables dari file .env
 require("dotenv").config();
 const { error } = require("firebase-functions/logger");
-const { db } = require('../config/firebase');
+const { db } = require('../config/firebase'); // Pastikan path ini benar
 const jwt = require("jsonwebtoken");
-// const { db } = require('./firebaseConfig'); // Pastikan db diimport sesuai struktur foldermu
 
 const verifyToken = async (req, res, next) => {
   try {
@@ -31,8 +30,7 @@ const verifyToken = async (req, res, next) => {
     // Verifikasi menggunakan Secret dari .env
     const decoded = jwt.verify(token, secretKey);
 
-    // Cek User di DB (Opsional, tapi aman)
-    // Pastikan 'db' sudah terdefinisi/diimport di file ini
+    // Cek User di DB
     const userDoc = await db.collection("users").doc(decoded.id).get();
 
     if (!userDoc.exists) {
@@ -43,18 +41,39 @@ const verifyToken = async (req, res, next) => {
 
     const userData = userDoc.data();
 
+    // ----------------------------------------------------------------------
+    // [BARU] LOGIC SINGLE SESSION (MENCEGAH DOUBLE LOGIN)
+    // ----------------------------------------------------------------------
+    // decoded.deviceId = Device ID yang tersimpan di dalam Token (dari Login)
+    // userData.currentDeviceId = Device ID terakhir yang login di Database
+    
+    // Pengecekan:
+    // 1. Pastikan di database ada currentDeviceId (untuk backward compatibility)
+    // 2. Jika ada, bandingkan dengan yang di token.
+    if (userData.currentDeviceId && decoded.deviceId) {
+        if (userData.currentDeviceId !== decoded.deviceId) {
+            // Jika BEDA, berarti ada device baru yang login setelah token ini dibuat
+            return res.status(401).json({ 
+                message: "Sesi kadaluarsa. Akun Anda telah login di perangkat lain.",
+                forceLogout: true // Flag untuk Frontend
+            });
+        }
+    }
+    // ----------------------------------------------------------------------
+
     req.user = {
       email: decoded.id,
       role: userData.role,
       idCompany: userData.idCompany,
       status: userData.status,
       nama: userData.username,
+      deviceId: decoded.deviceId // Opsional: simpan juga deviceId di req
     };
 
     next();
   } catch (e) {
     console.error("Token Error:", e);
-    return res.status(403).json({ message: "Token Invalid atau Kadaluarsa", error: e, token: token});
+    return res.status(403).json({ message: "Token Invalid atau Kadaluarsa", error: e.message });
   }
 };
 
