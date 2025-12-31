@@ -825,6 +825,15 @@ router.post("/request-reset-device", async (req, res) => {
       },
     });
 
+    // --- LOG ACTIVITY: REQUEST ---
+    await logCompanyActivity(idCompany, {
+      actorEmail: email,
+      actorName: userData.username,
+      target: "Admin",
+      action: "REQUEST_RESET_DEVICE",
+      description: `User requesting device reset. Reason: ${reason}`,
+    });
+
     return res.status(200).json({
       message: "Permohonan terkirim ke Admin.",
       info: "Silakan tunggu persetujuan Admin via Email.",
@@ -864,7 +873,7 @@ router.get("/admin/confirm-reset-device", async (req, res) => {
         .send("<h1>Error: Token tidak valid untuk aksi ini.</h1>");
     }
 
-    const targetUserEmail = decoded.targetUserEmail;
+    const { targetUserEmail, companyId } = decoded;
 
     // 3. Eksekusi Reset di Database
     const targetUserRef = db.collection("users").doc(targetUserEmail);
@@ -881,6 +890,31 @@ router.get("/admin/confirm-reset-device", async (req, res) => {
       // deviceInfo: admin.firestore.FieldValue.delete(), // Opsional
       lastResetBy: "EmailConfirmation",
       lastResetAt: Timestamp.now(),
+    });
+
+    // --- LOG ACTIVITY: APPROVED ---
+    // Kita coba cari email admin dari company doc (agar log lebih rapi),
+    // tapi kalau gagal kita set default.
+    let adminEmailForLog = "system";
+    let adminNameForLog = "Admin (via Email)";
+
+    try {
+      if (companyId) {
+        const compSnap = await db.collection("companies").doc(companyId).get();
+        if (compSnap.exists) {
+          adminEmailForLog = compSnap.data().createdBy || "system";
+        }
+      }
+    } catch (err) {
+      console.error("Log fetch error:", err);
+    }
+
+    await logCompanyActivity(companyId, {
+      actorEmail: adminEmailForLog,
+      actorName: adminNameForLog,
+      target: targetUserEmail,
+      action: "RESET_DEVICE_APPROVED",
+      description: `Device binding reset confirmed via email link for user ${targetUserEmail}.`,
     });
 
     // 4. Tampilkan Halaman Sukses Sederhana
