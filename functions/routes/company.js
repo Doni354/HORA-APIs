@@ -2,7 +2,7 @@
 const admin = require("firebase-admin");
 require("dotenv").config();
 const express = require("express");
-const { Timestamp } = require("firebase-admin/firestore");
+const { Timestamp, FieldValue } = require("firebase-admin/firestore");
 const { db, bucket } = require("../config/firebase");
 const { verifyToken } = require("../middleware/token");
 const { logCompanyActivity } = require("../helper/logCompanyActivity");
@@ -380,12 +380,6 @@ router.get("/log-activity", verifyToken, async (req, res) => {
         .json({ message: "User tidak terikat dengan perusahaan manapun." });
     }
 
-    // 2. Validasi Role: Hanya Admin yang boleh lihat log (Opsional, sesuaikan kebutuhan)
-    if (user.role !== "admin") {
-      return res.status(403).json({
-        message: "Akses ditolak. Hanya Admin yang boleh melihat Log Aktivitas.",
-      });
-    }
 
     // 3. Ambil Data Log dari Firestore
     // Path: companies/{idCompany}/logs
@@ -436,6 +430,94 @@ router.get("/log-activity", verifyToken, async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------
+// POST ACTIVITY LOG (Create New Log)
+// ---------------------------------------------------------
+// Endpoint: POST /api/log-activity
+// Headers: Authorization: Bearer <token_jwt>
+// Body (JSON):
+// {
+//   "action": "UPDATE_PROFILE",
+//   "description": "User mengubah data nomor telepon",
+//   "target": "Profile Page" (Opsional)
+// }
+// ---------------------------------------------------------
+// POST ACTIVITY LOG (With Fetch User Data)
+// ---------------------------------------------------------
+router.post("/log-activity", verifyToken, async (req, res) => {
+  try {
+    const tokenData = req.user; // Ini hasil dari verifyToken
+
+    // --- DEBUGGING (Opsional) ---
+    // console.log("User dari Token:", tokenData);
+    // ----------------------------
+
+    const { action, description, target } = req.body;
+
+    // 1. Validasi Body
+    if (!action || !description) {
+      return res.status(400).json({ message: "Action dan Description wajib diisi." });
+    }
+
+    // 2. Validasi Token Data
+    // PERBAIKAN: Cek 'email', bukan 'id'
+    if (!tokenData || !tokenData.email) {
+        return res.status(400).json({ message: "Token invalid: Email user tidak ditemukan." });
+    }
+
+    if (!tokenData.idCompany) {
+        return res.status(400).json({ message: "User tidak terikat dengan perusahaan." });
+    }
+
+    // 3. Ambil Data User Lengkap (termasuk UID)
+    // PERBAIKAN: Gunakan 'tokenData.email' sebagai Document ID
+    const userDocRef = db.collection("users").doc(tokenData.email);
+    const userSnapshot = await userDocRef.get();
+
+    // Default data jaga-jaga kalau DB read gagal (fallback ke data token)
+    let userData = {
+        username: tokenData.nama || "Unknown",
+        uid: tokenData.email, // Fallback uid pake email dulu
+        alamatEmail: tokenData.email
+    };
+
+    if (userSnapshot.exists) {
+       userData = userSnapshot.data();
+    }
+
+    // 4. Siapkan Object Log
+    const newLog = {
+      actorName: userData.username || userData.nama || tokenData.nama, 
+      actorEmail: userData.alamatEmail || tokenData.email,
+      actorId: userData.uid || tokenData.email, // UID asli dari DB Users
+      role: tokenData.role,
+      
+      action: action,
+      description: description,
+      target: target || "-",
+      createdAt: FieldValue.serverTimestamp(),
+    };
+
+    // 5. Simpan Log
+    await db
+      .collection("companies")
+      .doc(tokenData.idCompany)
+      .collection("logs")
+      .add(newLog);
+
+    return res.status(201).json({
+      message: "Log aktivitas berhasil dicatat.",
+      data: {
+        ...newLog,
+        createdAt: new Date().toISOString() 
+      }
+    });
+
+  } catch (error) {
+    console.error("Post Log Error:", error);
+    return res.status(500).json({ message: "Server Error saat mencatat log." });
+  }
+});
 // ---------------------------------------------------------
 // GET LIST PEGAWAI (Filter by Company)
 // ---------------------------------------------------------
