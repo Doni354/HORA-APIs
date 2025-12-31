@@ -62,6 +62,7 @@ router.get("/HomeA", async (req, res) => {
         LongtitudeCheckOut: data.longtitudeCheckOut || null,
         durasi: data.durasi || null,
         AlamatLocCheckOut: data.alamatLocCheckOut || null,
+        shift: data.shift
       }
     })
 
@@ -151,66 +152,96 @@ router.get("/indie", async (req, res) => {
 })
 
 // ---------------------------------------------------------
-// POST /absensi - Check In Absensi
+// POST /absensi - Check In Absensi (Auto Shift Detection)
 // ---------------------------------------------------------
 router.post("/", (req, res) => {
-  const busboy = Busboy({ headers: req.headers })
+  const busboy = Busboy({ headers: req.headers });
 
-  const fields = {}
-  let fileBuffer = null
-  let fileMime = null
-  let fileName = null
+  const fields = {};
+  let fileBuffer = null;
+  let fileMime = null;
+  let fileName = null;
 
   busboy.on("field", (fieldname, val) => {
-    fields[fieldname] = val
-  })
+    fields[fieldname] = val;
+  });
 
   busboy.on("file", (fieldname, file, info) => {
     if (fieldname === "Foto") {
-      const { mimeType, filename } = info
-      fileMime = mimeType
-      fileName = filename
-      const chunks = []
+      const { mimeType, filename } = info;
+      fileMime = mimeType;
+      fileName = filename;
+      const chunks = [];
 
-      file.on("data", (data) => chunks.push(data))
+      file.on("data", (data) => chunks.push(data));
       file.on("end", () => {
-        fileBuffer = Buffer.concat(chunks)
-      })
+        fileBuffer = Buffer.concat(chunks);
+      });
     } else {
-      file.resume()
+      file.resume();
     }
-  })
+  });
 
   busboy.on("error", (err) => {
-    console.error("Busboy Error:", err)
-    return res.status(500).json({ message: "Gagal mengurai form data", error: err.message })
-  })
+    console.error("Busboy Error:", err);
+    return res.status(500).json({ message: "Gagal mengurai form data", error: err.message });
+  });
 
   busboy.on("finish", async () => {
     try {
-      const idKaryawan = fields.IDKaryawan
-      const namaKaryawan = fields.NamaKaryawan
-      const alamatLongtitude = fields.AlamatLongtitude
-      const alamatLatitude = fields.AlamatLatitude
-      const alamatLoc = fields.AlamatLoc || ""
-      const idPerusahaan = fields.IDPerusahaan
-      const namaPerusahaan = fields.NamaPerusahaan
-      const zone = fields.zone || "Asia/Jakarta"
+      const idKaryawan = fields.IDKaryawan;
+      const namaKaryawan = fields.NamaKaryawan;
+      const alamatLongtitude = fields.AlamatLongtitude;
+      const alamatLatitude = fields.AlamatLatitude;
+      const alamatLoc = fields.AlamatLoc || "";
+      const idPerusahaan = fields.IDPerusahaan;
+      const namaPerusahaan = fields.NamaPerusahaan;
+      const zone = fields.zone || "Asia/Jakarta";
 
-      // Validasi required fields
-      if (!idKaryawan) return res.status(400).json({ message: "IDKaryawan wajib diisi" })
-      if (!namaKaryawan) return res.status(400).json({ message: "NamaKaryawan wajib diisi" })
-      if (!alamatLongtitude) return res.status(400).json({ message: "AlamatLongtitude wajib diisi" })
-      if (!alamatLatitude) return res.status(400).json({ message: "AlamatLatitude wajib diisi" })
-      if (!idPerusahaan) return res.status(400).json({ message: "IDPerusahaan wajib diisi" })
-      if (!namaPerusahaan) return res.status(400).json({ message: "NamaPerusahaan wajib diisi" })
-      if (!fileBuffer) return res.status(400).json({ message: "Photo is empty" })
+      // 1. Validasi required fields (Shift dihapus dari sini karena auto)
+      if (!idKaryawan) return res.status(400).json({ message: "IDKaryawan wajib diisi" });
+      if (!namaKaryawan) return res.status(400).json({ message: "NamaKaryawan wajib diisi" });
+      if (!alamatLongtitude) return res.status(400).json({ message: "AlamatLongtitude wajib diisi" });
+      if (!alamatLatitude) return res.status(400).json({ message: "AlamatLatitude wajib diisi" });
+      if (!idPerusahaan) return res.status(400).json({ message: "IDPerusahaan wajib diisi" });
+      if (!namaPerusahaan) return res.status(400).json({ message: "NamaPerusahaan wajib diisi" });
+      if (!fileBuffer) return res.status(400).json({ message: "Photo is empty" });
 
-      // Check if already checked in today
-      const today = new Date()
-      today.setHours(0, 0, 0, 0)
-      const tomorrow = new Date(today)
-      tomorrow.setDate(tomorrow.getDate() + 1)
+      // ----------------------------------------------------------
+      // 2. LOGIKA PENENTUAN SHIFT OTOMATIS
+      // ----------------------------------------------------------
+      const now = new Date();
+      // Paksa ambil jam dalam format WIB (Asia/Jakarta) integer 0-23
+      const currentHour = parseInt(
+        now.toLocaleString("en-US", {
+          timeZone: "Asia/Jakarta",
+          hour: "numeric",
+          hour12: false,
+        })
+      );
+
+      let detectedShift = "";
+
+      // Logika:
+      // Pagi  = 07:00 s/d 14:59 (Jam 7 sampai < 15)
+      // Siang = 15:00 s/d 22:59 (Jam 15 sampai < 23)
+      // Malam = 23:00 s/d 06:59 (Sisanya)
+
+      if (currentHour >= 7 && currentHour < 15) {
+        detectedShift = "Pagi";
+      } else if (currentHour >= 15 && currentHour < 23) {
+        detectedShift = "Siang";
+      } else {
+        // Ini akan menangkap jam 23, 00, 01, 02, 03, 04, 05, 06
+        detectedShift = "Malam";
+      }
+      // ----------------------------------------------------------
+
+      // 3. Cek apakah sudah absen hari ini
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
 
       const existingCheckIn = await db
         .collection("absensi")
@@ -219,23 +250,23 @@ router.post("/", (req, res) => {
         .where("tanggal", ">=", today)
         .where("tanggal", "<", tomorrow)
         .limit(1)
-        .get()
+        .get();
 
       if (!existingCheckIn.empty) {
-        return res.status(400).json({ message: "Sudah check in hari ini" })
+        return res.status(400).json({ message: "Sudah check in hari ini" });
       }
 
       // Upload photo
-      const timestamp = Date.now()
-      const ext = path.extname(fileName || "").toLowerCase() || ".jpg"
-      const photoPath = `absensi/checkin/${idPerusahaan}/${idKaryawan}_${timestamp}${ext}`
+      const timestamp = Date.now();
+      const ext = path.extname(fileName || "").toLowerCase() || ".jpg";
+      const photoPath = `absensi/checkin/${idPerusahaan}/${idKaryawan}_${timestamp}${ext}`;
 
-      const photoStorage = bucket.file(photoPath)
+      const photoStorage = bucket.file(photoPath);
       await photoStorage.save(fileBuffer, {
         metadata: { contentType: fileMime || "image/jpeg" },
         public: true,
-      })
-      const photoURL = photoStorage.publicUrl()
+      });
+      const photoURL = photoStorage.publicUrl();
 
       // Save to Firestore
       const absensiData = {
@@ -246,6 +277,7 @@ router.post("/", (req, res) => {
         alamatLoc,
         idPerusahaan,
         namaPerusahaan,
+        shift: detectedShift, // Simpan shift yang sudah dihitung otomatis
         tanggal: Timestamp.now(),
         waktuCheckIn: Timestamp.now(),
         waktuCheckOut: null,
@@ -258,24 +290,24 @@ router.post("/", (req, res) => {
         zone,
         status: "checked-in",
         createdAt: Timestamp.now(),
-      }
+      };
 
-      const docRef = await db.collection("absensi").add(absensiData)
+      const docRef = await db.collection("absensi").add(absensiData);
 
       return res.status(200).json({
-        message: "Absensi Created!",
+        message: `Absensi Berhasil (Shift ${detectedShift})`,
         id: docRef.id,
         fotoURL: photoURL,
-      })
+        shift: detectedShift // Mengembalikan info shift ke FE
+      });
     } catch (err) {
-      console.error("Check in error:", err)
-      return res.status(500).json({ message: "Gagal menyimpan absensi", error: err.message })
+      console.error("Check in error:", err);
+      return res.status(500).json({ message: "Gagal menyimpan absensi", error: err.message });
     }
-  })
+  });
 
-  busboy.end(req.rawBody)
-})
-
+  busboy.end(req.rawBody);
+});
 // ---------------------------------------------------------
 // PUT /absensi/pulang - Check Out Absensi
 // ---------------------------------------------------------
