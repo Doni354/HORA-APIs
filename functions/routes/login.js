@@ -168,20 +168,168 @@ router.get("/verifyOTP", async (req, res) => {
 
 const crypto = require("crypto");
 
-// ---------------------------------------------------------
-// LOGIN GOOGLE (Logic Baru: Role Check Dulu -> Baru Verify)
-// ---------------------------------------------------------
+// ==================================================================
+// 1. HELPER FUNCTIONS (OPTIMISASI)
+// ==================================================================
+
+/**
+ * Validasi Status & Role User
+ * Mengembalikan string error jika bermasalah, atau null jika aman.
+ */
+const checkUserStatus = (data) => {
+  if (data.status === "inactive" || data.status === "banned") {
+    return "Akun dinonaktifkan oleh sistem.";
+  }
+  if (data.role === "candidate") {
+    return "Akun sedang menunggu persetujuan Admin.";
+  }
+  if (data.role === "rejected") {
+    return "Lamaran Anda ditolak, silakan daftar kembali.";
+  }
+  return null; // OK
+};
+
+/**
+ * Logic Anti-Curang Device (Strict Mode)
+ * Mengembalikan object { allowed: boolean, errorData: object }
+ */
+const checkDeviceSecurity = async (
+  db,
+  userEmail,
+  userData,
+  incomingDeviceId
+) => {
+  // CEK 1: ACCOUNT LOCKING (Akun ini milik Device siapa?)
+  // Jika user sudah terikat device lain, tolak.
+  if (
+    userData.currentDeviceId &&
+    userData.currentDeviceId !== incomingDeviceId
+  ) {
+    return {
+      allowed: false,
+      errorData: {
+        status: 409,
+        message: "Login Gagal. Akun ini terkunci pada perangkat lain.",
+        error: "DEVICE_MISMATCH",
+        info: "Ganti device harus melalui persetujuan Admin (Reset Device).",
+      },
+    };
+  }
+
+  // CEK 2: DEVICE LOCKING (Device ini milik Siapa?)
+  // Cari apakah ada user LAIN yang sedang mengunci device ini.
+  const duplicateDeviceQuery = await db
+    .collection("users")
+    .where("currentDeviceId", "==", incomingDeviceId)
+    .get();
+
+  let deviceUsedByOther = false;
+  duplicateDeviceQuery.forEach((doc) => {
+    if (doc.id !== userEmail) deviceUsedByOther = true;
+  });
+
+  if (deviceUsedByOther) {
+    return {
+      allowed: false,
+      errorData: {
+        status: 409,
+        message: "Login Gagal. Perangkat ini sudah terdaftar untuk akun lain.",
+        error: "DEVICE_ALREADY_USED",
+        info: "Satu perangkat hanya boleh digunakan oleh satu akun.",
+      },
+    };
+  }
+
+  return { allowed: true };
+};
+
+/**
+ * Logic Verifikasi Email & Cooldown
+ * Menghandle pengecekan status, cooldown, dan pengiriman email otomatis.
+ */
+const handleEmailVerification = async (db, userRef, userData, email) => {
+  // Jika sudah verified, langsung return true
+  if (userData.verified === true) {
+    return { isVerified: true };
+  }
+
+  // --- LOGIC COOLDOWN ---
+  const lastSent = userData.lastVerifyEmailSentAt
+    ? userData.lastVerifyEmailSentAt.toMillis()
+    : 0;
+  const now = Date.now();
+  const cooldownMs = 5 * 60 * 1000; // 5 Menit
+
+  if (now - lastSent < cooldownMs) {
+    const remainingSeconds = Math.ceil((cooldownMs - (now - lastSent)) / 1000);
+    return {
+      isVerified: false,
+      errorData: {
+        status: 403,
+        message: "Akun belum diverifikasi.",
+        error: "EMAIL_COOLDOWN",
+        info: `Email verifikasi sudah dikirim. Harap tunggu ${remainingSeconds} detik sebelum meminta ulang.`,
+        remainingSeconds: remainingSeconds,
+      },
+    };
+  }
+
+  // --- PROSES KIRIM EMAIL ---
+  const verifyToken = crypto.randomBytes(20).toString("hex");
+  const tokenExpires = Date.now() + 3600000; // 1 Jam
+
+  // Update DB
+  await userRef.update({
+    verifyToken: verifyToken,
+    verifyTokenExpires: tokenExpires,
+    lastVerifyEmailSentAt: Timestamp.now(),
+  });
+
+  // Kirim Email (Masuk collection 'mail')
+  const linkVerifikasi = `https://api-y4ntpb3uvq-et.a.run.app/api/Login/confirm-email?email=${email}&token=${verifyToken}`;
+
+  await db.collection("mail").add({
+    to: email,
+    message: {
+      subject: "Verifikasi Akun Anda",
+      html: `
+              <h3>Halo, ${userData.username || "User"}</h3>
+              <p>Selamat! Akun Anda telah disetujui. Langkah terakhir, silakan verifikasi email Anda:</p>
+              <a href="${linkVerifikasi}" style="background:#007bff; color:white; padding:10px 20px; text-decoration:none; border-radius:5px;">Verifikasi Sekarang</a>
+              <p>Link berlaku selama 1 jam.</p>
+          `,
+    },
+  });
+
+  return {
+    isVerified: false,
+    errorData: {
+      status: 403,
+      message: "Akun belum diverifikasi.",
+      error: "EMAIL_NOT_VERIFIED",
+      info: "Email verifikasi baru saja dikirim. Silakan cek inbox/spam.",
+    },
+  };
+};
+
+// ==================================================================
+// 2. MAIN ROUTE (BERSIH & TERBACA)
+// ==================================================================
 router.post("/login-google", async (req, res) => {
   try {
-    const { idToken, deviceId} = req.body;
+    const { idToken, deviceId, deviceInfo } = req.body;
+
+    // --- A. Validasi Input ---
     if (!idToken)
       return res.status(400).json({ message: "Google ID Token diperlukan." });
-    // Validasi Device ID (Wajib ada biar fitur single session jalan)
-    if (!deviceId) return res.status(400).json({ message: "Device ID diperlukan untuk keamanan." });
-    // 1. Verifikasi Token Google
+    if (!deviceId)
+      return res
+        .status(400)
+        .json({ message: "Device ID diperlukan untuk keamanan." });
+
+    // --- B. Verifikasi Token Google ---
     let decodedToken;
     try {
-      // Pastikan token bersih dari spasi
       decodedToken = await admin
         .auth()
         .verifyIdToken(idToken.toString().trim());
@@ -193,7 +341,7 @@ router.post("/login-google", async (req, res) => {
     const userRef = db.collection("users").doc(email);
     const userDoc = await userRef.get();
 
-    // 2. Cek User Terdaftar
+    // --- C. Cek User Exists ---
     if (!userDoc.exists) {
       return res
         .status(404)
@@ -202,112 +350,47 @@ router.post("/login-google", async (req, res) => {
 
     const data = userDoc.data();
 
-    // ------------------------------------------------------------------
-    // TAHAP 1: CEK STATUS & ROLE TERLEBIH DAHULU (PRIORITAS UTAMA)
-    // ------------------------------------------------------------------
-
-    // Cek Status Akun (Inactive/Banned)
-    if (data.status === "inactive" || data.status === "banned") {
-      return res
-        .status(403)
-        .json({ message: "Akun dinonaktifkan oleh sistem." });
+    // --- D. Cek Status & Role (Panggil Helper) ---
+    const statusError = checkUserStatus(data);
+    if (statusError) {
+      return res.status(403).json({ message: statusError });
     }
 
-    // Cek Role Candidate (Masih Menunggu)
-    if (data.role === "candidate") {
-      return res
-        .status(403)
-        .json({ message: "Akun sedang menunggu persetujuan Admin." });
+    // --- E. Cek Keamanan Device (Panggil Helper Anti-Curang) ---
+    const deviceCheck = await checkDeviceSecurity(db, email, data, deviceId);
+    if (!deviceCheck.allowed) {
+      const { status, ...errJson } = deviceCheck.errorData;
+      return res.status(status).json(errJson);
     }
 
-    // Cek Role Rejected (Ditolak)
-    if (data.role === "rejected") {
-      return res
-        .status(403)
-        .json({ message: "Lamaran Anda ditolak, silakan daftar kembali." });
+    // --- F. Cek Verifikasi Email (Panggil Helper Email) ---
+    const emailCheck = await handleEmailVerification(db, userRef, data, email);
+    if (!emailCheck.isVerified) {
+      const { status, ...errJson } = emailCheck.errorData;
+      return res.status(status).json(errJson);
     }
 
-    // ------------------------------------------------------------------
-    // TAHAP 2: CEK VERIFIKASI EMAIL (Hanya untuk Admin / Staff)
-    // ------------------------------------------------------------------
-    // Kode ini hanya akan dieksekusi jika user BUKAN candidate/rejected/banned
-    if (data.verified === false) {
-      // --- UPDATE: CEK COOLDOWN PENGIRIMAN EMAIL ---
-      const lastSent = data.lastVerifyEmailSentAt
-        ? data.lastVerifyEmailSentAt.toMillis()
-        : 0;
-      const now = Date.now();
-      const cooldownMs = 5 * 60 * 1000; // 5 Menit (dalam milidetik)
+    // ==============================================================
+    // SUKSES: Update DB & Generate Token
+    // ==============================================================
 
-      // Jika belum 5 menit sejak pengiriman terakhir, tolak request pengiriman baru
-      if (now - lastSent < cooldownMs) {
-        // Hitung sisa waktu (untuk info debug/frontend)
-        const remainingSeconds = Math.ceil(
-          (cooldownMs - (now - lastSent)) / 1000
-        );
+    // Update data login terakhir & kunci device
+    await userRef.update({
+      lastLogin: Timestamp.now(),
+      currentDeviceId: deviceId,
+      deviceInfo: deviceInfo || "Unknown",
+    });
 
-        return res.status(403).json({
-          message: "Akun belum diverifikasi.",
-          error: "EMAIL_COOLDOWN", // Error code khusus biar FE tau
-          info: `Email verifikasi sudah dikirim. Harap tunggu ${remainingSeconds} detik sebelum meminta ulang.`,
-          remainingSeconds: remainingSeconds,
-        });
-      }
-
-      // A. Generate Token Verifikasi Baru
-      const verifyToken = crypto.randomBytes(20).toString("hex");
-      const tokenExpires = Date.now() + 3600000; // 1 Jam
-
-      // B. Update DB (Simpan Token & Timestamp Pengiriman)
-      await userRef.update({
-        verifyToken: verifyToken,
-        verifyTokenExpires: tokenExpires,
-        lastVerifyEmailSentAt: Timestamp.now(), // <--- Simpan waktu kirim
-      });
-
-      // C. Kirim Email
-      const linkVerifikasi = `https://api-y4ntpb3uvq-et.a.run.app/api/Login/confirm-email?email=${email}&token=${verifyToken}`;
-
-      await db.collection("mail").add({
-        to: email,
-        message: {
-          subject: "Verifikasi Akun Anda",
-          html: `
-            <h3>Halo, ${data.username || "User"}</h3>
-            <p>Selamat! Akun Anda telah disetujui. Langkah terakhir, silakan verifikasi email Anda:</p>
-            <a href="${linkVerifikasi}" style="background:#007bff; color:white; padding:10px 20px; text-decoration:none; border-radius:5px;">Verifikasi Sekarang</a>
-            <p>Link berlaku selama 1 jam.</p>
-          `,
-        },
-      });
-
-      // D. Return Error 403
-      return res.status(403).json({
-        message: "Akun belum diverifikasi.",
-        error: "EMAIL_NOT_VERIFIED",
-        info: "Email verifikasi baru saja dikirim. Silakan cek inbox/spam.",
-      });
-    }
-
-    // ------------------------------------------------------------------
-    // TAHAP 3: LOLOS SEMUA -> GENERATE JWT
-    // ------------------------------------------------------------------
-    // Saat Login Berhasil:
     const tokenPayload = {
       id: email,
       role: data.role,
       idCompany: data.idCompany,
       status: data.status,
-      deviceId: deviceId // <--- TAMBAHAN PENTING! Masukkan ini ke dalam token
+      deviceId: deviceId, // Token terikat ke device ini
     };
-    
-    // Jadi nanti isi tokennya: { id: "...", deviceId: "HP_Samsung_A", ... }
-    const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: "30d" });
-    
-    // Update DB: User ini sekarang "milik" deviceId ini
-    await userRef.update({ 
-        lastLogin: Timestamp.now(),
-        currentDeviceId: deviceId 
+
+    const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, {
+      expiresIn: "30d",
     });
 
     return res.status(200).json({
@@ -643,4 +726,194 @@ router.post("/register-employee", async (req, res) => {
   }
 });
 
+// ==================================================================
+// 3. ROUTE: REQUEST RESET DEVICE (USER -> EMAIL ADMIN)
+// ==================================================================
+router.post("/request-reset-device", async (req, res) => {
+  try {
+    const { idToken, reason } = req.body;
+
+    if (!idToken)
+      return res.status(400).json({ message: "Google ID Token diperlukan." });
+    if (!reason)
+      return res.status(400).json({ message: "Alasan reset wajib diisi." });
+
+    // A. Verifikasi Identitas User (via Google Token)
+    let decodedToken;
+    try {
+      decodedToken = await admin
+        .auth()
+        .verifyIdToken(idToken.toString().trim());
+    } catch (error) {
+      return res.status(401).json({ message: "Sesi Google tidak valid." });
+    }
+
+    const email = decodedToken.email;
+    const userDoc = await db.collection("users").doc(email).get();
+
+    if (!userDoc.exists)
+      return res.status(404).json({ message: "User tidak ditemukan." });
+
+    const userData = userDoc.data();
+    const idCompany = userData.idCompany;
+
+    if (!idCompany)
+      return res
+        .status(400)
+        .json({ message: "User tidak terdaftar di perusahaan." });
+
+    // B. Cari Email Admin
+    const companyDoc = await db.collection("companies").doc(idCompany).get();
+    if (!companyDoc.exists)
+      return res.status(404).json({ message: "Perusahaan tidak ditemukan." });
+    const adminEmail = companyDoc.data().createdBy;
+
+    if (!adminEmail)
+      return res
+        .status(500)
+        .json({ message: "Email admin perusahaan tidak ditemukan." });
+
+    // C. Generate Token Khusus untuk Link Reset (Berlaku 3 Hari)
+    // Token ini berisi 'action' khusus agar tidak bisa dipakai login biasa
+    const resetActionToken = jwt.sign(
+      {
+        action: "RESET_DEVICE_CONFIRMATION", // Marker khusus
+        targetUserEmail: email, // Siapa yang mau direset
+        companyId: idCompany, // Security tambahan
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "3d" }
+    );
+
+    // Link yang akan diklik Admin (GET Request)
+    // GANTI BASE URL SESUAI URL PROJECT FIREBASE FUNCTION KAMU
+    const baseUrl = "https://api-y4ntpb3uvq-et.a.run.app/";
+    const resetLink = `${baseUrl}/api/Login/admin/confirm-reset-device?token=${resetActionToken}`;
+
+    // D. Kirim Email ke Admin
+    await db.collection("mail").add({
+      to: adminEmail,
+      message: {
+        subject: `ACTION REQUIRED: Reset Device Request - ${userData.username}`,
+        html: `
+                  <div style="font-family: sans-serif; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
+                      <h2 style="color: #d32f2f;">Permohonan Reset Perangkat</h2>
+                      <p>Halo Admin,</p>
+                      <p>Pegawai Anda <b>${
+                        userData.username
+                      }</b> (${email}) meminta izin untuk login menggunakan perangkat baru.</p>
+                      
+                      <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                          <strong>Alasan:</strong><br>
+                          "${reason}"
+                          <br><br>
+                          <strong>Perangkat Lama:</strong><br>
+                          ${userData.deviceInfo || "Unknown Device"}
+                      </div>
+
+                      <p>Jika Anda menyetujui, silakan klik tombol di bawah ini. Device lama akan dihapus dari sistem, dan user dapat login di device baru.</p>
+
+                      <a href="${resetLink}" style="background-color: #d32f2f; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">
+                          SETUJUI & RESET DEVICE
+                      </a>
+
+                      <p style="margin-top: 20px; font-size: 12px; color: #666;">
+                          Link ini aman dan hanya berlaku selama 3 hari. Jangan bagikan email ini ke orang lain.
+                      </p>
+                  </div>
+              `,
+      },
+    });
+
+    return res.status(200).json({
+      message: "Permohonan terkirim ke Admin.",
+      info: "Silakan tunggu persetujuan Admin via Email.",
+    });
+  } catch (e) {
+    console.error("Request Reset Error:", e);
+    return res.status(500).json({ message: "Gagal mengirim permohonan." });
+  }
+});
+
+// ==================================================================
+// 4. ROUTE: CONFIRM RESET DEVICE (LINK DARI EMAIL)
+// ==================================================================
+// Ini endpoint GET karena diklik dari email (browser link)
+router.get("/admin/confirm-reset-device", async (req, res) => {
+  try {
+    const { token } = req.query;
+
+    if (!token) {
+      return res.status(400).send("<h1>Error: Token tidak ditemukan.</h1>");
+    }
+
+    // 1. Verifikasi Token
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (err) {
+      return res
+        .status(403)
+        .send("<h1>Error: Link kadaluarsa atau tidak valid.</h1>");
+    }
+
+    // 2. Cek apakah ini benar token reset device
+    if (decoded.action !== "RESET_DEVICE_CONFIRMATION") {
+      return res
+        .status(403)
+        .send("<h1>Error: Token tidak valid untuk aksi ini.</h1>");
+    }
+
+    const targetUserEmail = decoded.targetUserEmail;
+
+    // 3. Eksekusi Reset di Database
+    const targetUserRef = db.collection("users").doc(targetUserEmail);
+    const docSnap = await targetUserRef.get();
+
+    if (!docSnap.exists) {
+      return res
+        .status(404)
+        .send("<h1>Error: User sudah tidak terdaftar.</h1>");
+    }
+
+    await targetUserRef.update({
+      currentDeviceId: null,
+      // deviceInfo: admin.firestore.FieldValue.delete(), // Opsional
+      lastResetBy: "EmailConfirmation",
+      lastResetAt: Timestamp.now(),
+    });
+
+    // 4. Tampilkan Halaman Sukses Sederhana
+    const successHtml = `
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <title>Reset Berhasil</title>
+              <style>
+                  body { font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f0f2f5; margin: 0; }
+                  .card { background: white; padding: 40px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: center; max-width: 500px; }
+                  h1 { color: #2e7d32; }
+                  p { color: #555; line-height: 1.6; }
+                  .icon { font-size: 60px; margin-bottom: 20px; }
+              </style>
+          </head>
+          <body>
+              <div class="card">
+                  <div class="icon">✅</div>
+                  <h1>Reset Berhasil!</h1>
+                  <p>Binding perangkat untuk user <b>${targetUserEmail}</b> telah dihapus.</p>
+                  <p>User sekarang dapat login menggunakan perangkat baru mereka.</p>
+                  <br>
+                  <small>Anda dapat menutup halaman ini.</small>
+              </div>
+          </body>
+          </html>
+      `;
+
+    res.status(200).send(successHtml);
+  } catch (e) {
+    console.error("Confirm Reset Error:", e);
+    res.status(500).send("<h1>Terjadi kesalahan server.</h1>");
+  }
+});
 module.exports = router;
