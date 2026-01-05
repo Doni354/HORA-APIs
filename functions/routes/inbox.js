@@ -155,57 +155,80 @@ const connectToImap = async (userId, emailAccount) => {
 // ---------------------------------------------------------
 const getBoxName = (provider, folderType) => {
   if (!folderType) return "INBOX";
-  
+
   // Jika user mengirim Path Lengkap (misal: "[Gmail]/Tong Sampah"), langsung pakai.
   // PENTING: Pastikan spasi di URL di-encode (%20)
   if (folderType.includes("/") || folderType.includes("[")) {
-      return folderType; 
+    return folderType;
   }
-  
+
   const type = folderType.toLowerCase().trim(); // Trim spasi tidak sengaja
-  
-  if (provider === 'gmail') {
-      switch (type) {
-          // --- INGGRIS ---
-          case "inbox": return "INBOX";
-          case "sent": return "[Gmail]/Sent Mail";
-          case "draft": return "[Gmail]/Drafts";
-          case "spam": return "[Gmail]/Spam";
-          case "trash": return "[Gmail]/Trash";
-          case "starred": return "[Gmail]/Starred";
-          case "important": return "[Gmail]/Important";
-          case "all": return "[Gmail]/All Mail";
-          
-          // --- INDONESIA (Fix Spasi) ---
-          case "draf": return "[Gmail]/Draf";
-          case "terkirim": return "[Gmail]/Surat Terkirim";
-          case "surat terkirim": return "[Gmail]/Surat Terkirim"; // Tambahan
-          case "berbintang": return "[Gmail]/Berbintang";
-          case "penting": return "[Gmail]/Penting";
-          case "sampah": return "[Gmail]/Tong Sampah";
-          case "tong sampah": return "[Gmail]/Tong Sampah"; // Tambahan Penting!
-          case "semua email": return "[Gmail]/Semua Email"; // Tambahan
-          
-          // --- KATEGORI ---
-          case "social": return "Category/Social";
-          case "promotions": return "Category/Promotions";
-          
-          // Fallback: Jika tidak ada di list, kembalikan apa adanya (Case Sensitive)
-          // Ini agar folder custom user (misal "Project A") tetap bisa dibuka
-          default: return folderType; 
-      }
+
+  if (provider === "gmail") {
+    switch (type) {
+      // --- INGGRIS ---
+      case "inbox":
+        return "INBOX";
+      case "sent":
+        return "[Gmail]/Sent Mail";
+      case "draft":
+        return "[Gmail]/Drafts";
+      case "spam":
+        return "[Gmail]/Spam";
+      case "trash":
+        return "[Gmail]/Trash";
+      case "starred":
+        return "[Gmail]/Starred";
+      case "important":
+        return "[Gmail]/Important";
+      case "all":
+        return "[Gmail]/All Mail";
+
+      // --- INDONESIA (Fix Spasi) ---
+      case "draf":
+        return "[Gmail]/Draf";
+      case "terkirim":
+        return "[Gmail]/Surat Terkirim";
+      case "surat terkirim":
+        return "[Gmail]/Surat Terkirim"; // Tambahan
+      case "berbintang":
+        return "[Gmail]/Berbintang";
+      case "penting":
+        return "[Gmail]/Penting";
+      case "sampah":
+        return "[Gmail]/Tong Sampah";
+      case "tong sampah":
+        return "[Gmail]/Tong Sampah"; // Tambahan Penting!
+      case "semua email":
+        return "[Gmail]/Semua Email"; // Tambahan
+
+      // --- KATEGORI ---
+      case "social":
+        return "Category/Social";
+      case "promotions":
+        return "Category/Promotions";
+
+      // Fallback: Jika tidak ada di list, kembalikan apa adanya (Case Sensitive)
+      // Ini agar folder custom user (misal "Project A") tetap bisa dibuka
+      default:
+        return folderType;
+    }
   } else {
-      // Provider lain
-      switch (type) {
-          case "sent": return "Sent Items"; 
-          case "draft": return "Drafts";
-          case "spam": return "Junk"; 
-          case "trash": return "Trash"; 
-          default: return folderType;
-      }
+    // Provider lain
+    switch (type) {
+      case "sent":
+        return "Sent Items";
+      case "draft":
+        return "Drafts";
+      case "spam":
+        return "Junk";
+      case "trash":
+        return "Trash";
+      default:
+        return folderType;
+    }
   }
 };
-
 
 // ---------------------------------------------------------
 // ROUTE: CEK DAFTAR FOLDER
@@ -369,18 +392,19 @@ router.get("/messages", verifyToken, async (req, res) => {
 });
 
 // ---------------------------------------------------------
-// ROUTE: GET EMAIL DETAIL (Attachments & Replies)
+// ROUTE: GET EMAIL DETAIL (Attachments & Replies Fix)
 // ---------------------------------------------------------
 router.get("/message-detail", verifyToken, async (req, res) => {
   let connection;
   try {
-    const { emailAccount, folder, uid } = req.query;
+    const { emailAccount, folder, uid } = req.query; 
     const userId = req.user.email;
 
-    if (!emailAccount || !uid)
-      return res
-        .status(400)
-        .json({ message: "Email Account dan UID diperlukan" });
+    // --- TOKEN INJECTION ---
+    const authHeader = req.headers.authorization;
+    const rawToken = authHeader ? authHeader.split(" ")[1] : "";
+
+    if (!emailAccount || !uid) return res.status(400).json({ message: "Email Account dan UID diperlukan" });
 
     const connResult = await connectToImap(userId, emailAccount);
     connection = connResult.connection;
@@ -390,228 +414,243 @@ router.get("/message-detail", verifyToken, async (req, res) => {
     try {
       await connection.openBox(boxName);
     } catch (e) {
-      console.log(`Fallback box to INBOX`);
-      await connection.openBox("INBOX");
+        console.log(`Fallback box to INBOX`);
+        await connection.openBox("INBOX");
     }
 
-    // Fetch HANYA Header & Struct untuk email utama
-    const searchCriteria = [["UID", uid]];
-    const metaFetchOptions = {
-      bodies: ["HEADER"],
-      struct: true,
-      markSeen: true,
+    const searchCriteria = [['UID', uid]];
+    const metaFetchOptions = { 
+        bodies: ['HEADER'], 
+        struct: true, 
+        markSeen: true 
     };
 
-    const metaMessages = await connection.search(
-      searchCriteria,
-      metaFetchOptions
-    );
+    const metaMessages = await connection.search(searchCriteria, metaFetchOptions);
     if (metaMessages.length === 0) {
-      connection.end();
-      return res.status(404).json({ message: "Email tidak ditemukan." });
+        connection.end();
+        return res.status(404).json({ message: "Email tidak ditemukan." });
     }
 
     const item = metaMessages[0];
     const struct = item.attributes.struct;
-    const headerPart = item.parts.find((p) => p.which === "HEADER");
-
-    const subject = headerPart.body.subject
-      ? headerPart.body.subject[0]
-      : "(No Subject)";
+    const headerPart = item.parts.find(p => p.which === 'HEADER');
+    
+    const subject = headerPart.body.subject ? headerPart.body.subject[0] : "(No Subject)";
     const from = headerPart.body.from ? headerPart.body.from[0] : "Unknown";
     const to = headerPart.body.to ? headerPart.body.to[0] : "Me";
     const date = headerPart.body.date ? headerPart.body.date[0] : "";
-
-    // --- LOGIC ATTACHMENT ---
+    
+    // 2. Logic Attachment (PREVIEW & DOWNLOAD)
     let attachments = [];
     const findAttachments = (node, partId) => {
-      if (Array.isArray(node)) {
-        node.forEach((child, idx) =>
-          findAttachments(child, partId ? `${partId}.${idx + 1}` : `${idx + 1}`)
-        );
-        return;
-      }
+        if (Array.isArray(node)) {
+            node.forEach((child, idx) => findAttachments(child, partId ? `${partId}.${idx+1}` : `${idx+1}`));
+            return;
+        }
+        
+        const isAttachment = (node.disposition && node.disposition.type && node.disposition.type.toLowerCase() === 'attachment');
+        const isFile = ['image', 'application', 'video', 'audio'].includes(node.type);
+        
+        if (isAttachment || (isFile && node.type !== 'text')) {
+            const filename = node.params ? (node.params.name || node.params.fileName) : 'Unknown File';
+            
+            // BASE URL Attachment
+            const baseUrl = `https://api-y4ntpb3uvq-et.a.run.app/api/inbox/attachment?emailAccount=${encodeURIComponent(emailAccount)}&folder=${encodeURIComponent(folder || boxName)}&uid=${uid}&partId=${partId || '1'}&filename=${encodeURIComponent(filename)}&userId=${encodeURIComponent(userId)}`;
 
-      const isAttachment =
-        node.disposition &&
-        node.disposition.type &&
-        node.disposition.type.toLowerCase() === "attachment";
-      const isFile = ["image", "application", "video", "audio"].includes(
-        node.type
-      );
+            // Download Link (Force Download)
+            const downloadUrl = baseUrl;
+            
+            // Preview Link (Open in Browser) - Tambah &mode=preview
+            const previewUrl = `${baseUrl}&mode=preview`;
 
-      // Deteksi sebagai attachment jika disposition='attachment' ATAU tipe filenya bukan text biasa
-      if (isAttachment || (isFile && node.type !== "text")) {
-        const filename = node.params
-          ? node.params.name || node.params.fileName
-          : "Unknown File";
-        // Filter gambar inline (cid) jika tidak diinginkan, tapi untuk sekarang kita ambil semua
-
-        // Generate Download URL
-        // Token di query param ini opsional, bisa pakai header auth di FE
-        // Tapi untuk <a> tag download biasa, token di URL lebih mudah
-        const downloadUrl = `https://api-y4ntpb3uvq-et.a.run.app/api/Login/inbox/attachment?emailAccount=${encodeURIComponent(
-          emailAccount
-        )}&folder=${encodeURIComponent(folder || boxName)}&uid=${uid}&partId=${
-          partId || "1"
-        }&filename=${encodeURIComponent(filename)}`;
-
-        attachments.push({
-          filename: filename,
-          contentType: node.type + "/" + node.subtype,
-          size: node.size,
-          partId: partId,
-          downloadUrl: downloadUrl,
-        });
-      }
-
-      if (node.parts) {
-        findAttachments(node.parts, partId);
-      }
+            attachments.push({
+                filename: filename,
+                contentType: node.type + '/' + node.subtype,
+                size: node.size,
+                partId: partId,
+                downloadUrl: downloadUrl,
+                previewUrl: previewUrl // URL baru buat di-klik 'View'
+            });
+        }
+        if (node.parts) {
+            findAttachments(node.parts, partId);
+        }
     };
-
     if (struct) {
-      if (Array.isArray(struct))
-        struct.forEach((child, idx) => findAttachments(child, `${idx + 1}`));
-      else findAttachments(struct, "1");
+        if (Array.isArray(struct)) struct.forEach((child, idx) => findAttachments(child, `${idx+1}`));
+        else findAttachments(struct, '1');
     }
 
-    // --- LOGIC REPLIES (THREADING) ---
+    // 3. Logic Threading
     let replies = [];
-    // Khusus Gmail, gunakan Thread ID (X-GM-THRID)
-    if (accData.provider === "gmail" && item.attributes["x-gm-thrid"]) {
-      const threadId = item.attributes["x-gm-thrid"];
+    if (accData.provider === 'gmail' && item.attributes['x-gm-thrid']) {
+        const threadId = item.attributes['x-gm-thrid'];
+        try {
+            const currentBoxMessages = await connection.search([['X-GM-THRID', threadId]], { 
+                bodies: ['HEADER.FIELDS (FROM SUBJECT DATE)'], 
+                struct: false
+            });
+            
+            const inboxReplies = currentBoxMessages.map(tm => {
+                const tmHeader = tm.parts.find(p => p.which === 'HEADER.FIELDS (FROM SUBJECT DATE)')?.body;
+                return {
+                    id: tm.attributes.uid,
+                    folder: boxName,
+                    from: tmHeader?.from ? tmHeader.from[0] : "Unknown",
+                    subject: tmHeader?.subject ? tmHeader.subject[0] : "(No Subject)",
+                    date: tmHeader?.date ? tmHeader.date[0] : "",
+                    isCurrent: tm.attributes.uid == uid 
+                };
+            });
+            
+            replies = [...inboxReplies];
 
-      // Cari semua email dengan Thread ID yang sama
-      // Batasi header yang diambil biar ringan
-      try {
-        const threadMessages = await connection.search(
-          [["X-GM-THRID", threadId]],
-          {
-            bodies: ["HEADER.FIELDS (FROM SUBJECT DATE)"],
-            struct: false,
-          }
-        );
+            const sentCandidates = ["[Gmail]/Sent Mail", "[Gmail]/Surat Terkirim", "[Gmail]/Terkirim", "Sent Items", "Sent"];
+            const candidatesToTry = sentCandidates.filter(c => c !== boxName);
+            
+            let sentBoxFound = false;
+            let sentBoxMessages = [];
+            let activeSentFolderName = "";
 
-        // Map ke format sederhana
-        replies = threadMessages.map((tm) => {
-          const tmHeader = tm.parts.find(
-            (p) => p.which === "HEADER.FIELDS (FROM SUBJECT DATE)"
-          )?.body;
-          return {
-            id: tm.attributes.uid, // ID untuk dibuka di /message-body
-            from: tmHeader?.from ? tmHeader.from[0] : "Unknown",
-            subject: tmHeader?.subject ? tmHeader.subject[0] : "(No Subject)",
-            date: tmHeader?.date ? tmHeader.date[0] : "",
-            isCurrent: tm.attributes.uid == uid, // Flag penanda email yang sedang dibuka
-          };
-        });
+            for (const candidate of candidatesToTry) {
+                if (sentBoxFound) break;
+                try {
+                    await connection.openBox(candidate);
+                    sentBoxMessages = await connection.search([['X-GM-THRID', threadId]], { 
+                        bodies: ['HEADER.FIELDS (FROM SUBJECT DATE)'], 
+                        struct: false
+                    });
+                    sentBoxFound = true;
+                    activeSentFolderName = candidate;
+                } catch (e) {}
+            }
 
-        // Urutkan berdasarkan tanggal/UID
-        replies.sort((a, b) => a.id - b.id);
-      } catch (threadErr) {
-        console.log("Threading error:", threadErr);
-        // Kalau gagal, replies kosong
-      }
+            if (sentBoxFound) {
+                const sentReplies = sentBoxMessages.map(tm => {
+                    const tmHeader = tm.parts.find(p => p.which === 'HEADER.FIELDS (FROM SUBJECT DATE)')?.body;
+                    return {
+                        id: tm.attributes.uid,
+                        folder: activeSentFolderName, 
+                        from: tmHeader?.from ? tmHeader.from[0] : "Unknown",
+                        subject: tmHeader?.subject ? tmHeader.subject[0] : "(No Subject)",
+                        date: tmHeader?.date ? tmHeader.date[0] : "",
+                        isCurrent: false 
+                    };
+                });
+                replies = [...replies, ...sentReplies];
+            }
+            replies.sort((a, b) => new Date(a.date) - new Date(b.date));
+        } catch (threadErr) {}
     } else {
-      // Untuk provider lain, sementara tampilkan email ini saja sebagai satu-satunya item
-      replies.push({
-        id: item.attributes.uid,
-        from: from,
-        subject: subject,
-        date: date,
-        isCurrent: true,
-      });
+        replies.push({ id: item.attributes.uid, folder: boxName, from: from, subject: subject, date: date, isCurrent: true });
     }
 
     connection.end();
 
-    return res.status(200).json({
-      id: item.attributes.uid,
-      subject: subject,
-      from: from,
-      to: to,
-      date: date,
-      attachments: attachments,
-      replies: replies, // Data untuk list thread di FE
-      contentUrlParams: {
-        emailAccount: emailAccount,
-        folder: folder,
-        uid: uid,
-      },
+    return res.status(200).json({ 
+        id: item.attributes.uid,
+        subject: subject,
+        from: from,
+        to: to,
+        date: date,
+        attachments: attachments,
+        replies: replies, 
+        contentUrlParams: {
+            emailAccount: emailAccount,
+            folder: folder, 
+            uid: uid
+        }
     });
+
   } catch (error) {
-    if (connection) connection.end();
-    return res
-      .status(500)
-      .json({ message: "Gagal membuka email", error: error.message });
+    if(connection) connection.end();
+    return res.status(500).json({ message: "Gagal membuka email", error: error.message });
   }
 });
 
 // ---------------------------------------------------------
-// ROUTE: DOWNLOAD ATTACHMENT
+// ROUTE: DOWNLOAD ATTACHMENT (PUBLIC / NO AUTH)
+// Updated with PREVIEW Support (mode=preview)
 // ---------------------------------------------------------
-router.get("/attachment", verifyToken, async (req, res) => {
+router.get("/attachment", async (req, res) => {
   let connection;
   try {
-    const { emailAccount, folder, uid, partId, filename } = req.query;
-    const userId = req.user.email;
+      const { emailAccount, folder, uid, partId, filename, userId, mode } = req.query;
 
-    if (!partId) return res.status(400).send("Part ID missing");
+      // Validasi minimal
+      if (!userId) return res.status(400).send("Unauthorized Access: Missing User Identity");
+      if (!partId) return res.status(400).send("Part ID missing");
 
-    const connResult = await connectToImap(userId, emailAccount);
-    connection = connResult.connection;
-    const accData = connResult.accData;
+      const connResult = await connectToImap(userId, emailAccount);
+      connection = connResult.connection;
+      const accData = connResult.accData;
 
-    let boxName = getBoxName(accData.provider, folder);
-    try {
-      await connection.openBox(boxName || "INBOX");
-    } catch (e) {
-      await connection.openBox("INBOX");
-    }
+      let boxName = getBoxName(accData.provider, folder);
+      try { await connection.openBox(boxName || "INBOX"); } 
+      catch (e) { await connection.openBox("INBOX"); }
 
-    // Fetch Raw Part Body
-    // Kita tidak pake simpleParser disini karena kita mau raw buffer
-    const searchCriteria = [["UID", uid]];
-    const fetchOptions = { bodies: [partId], markSeen: false };
+      let fileBuffer;
+      let mimeType = 'application/octet-stream';
 
-    const messages = await connection.search(searchCriteria, fetchOptions);
+      // STRATEGI 1: Coba ambil Part ID Spesifik (Cepat)
+      try {
+          console.log(`Attachment: Attempting fetch specific part ${partId}`);
+          const searchCriteria = [['UID', uid]];
+          const fetchOptions = { bodies: [partId], markSeen: false };
+          const messages = await connection.search(searchCriteria, fetchOptions);
+          
+          if (messages.length > 0) {
+              const partData = messages[0].parts.find(p => p.which === partId);
+              if (partData && partData.body) {
+                  const rawBody = partData.body;
+                  const cleanBody = rawBody.replace(/\r?\n|\r/g, "");
+                  fileBuffer = Buffer.from(cleanBody, 'base64');
+              }
+          }
+      } catch (err) {
+          console.log(`Attachment: Specific fetch failed (${err.message}). Switching to Fallback.`);
+      }
 
-    if (messages.length === 0) {
+      // STRATEGI 2: Fallback ke Full Message Fetch & Parse (Robust)
+      if (!fileBuffer) {
+          console.log("Attachment: Fetching full message for extraction...");
+          const messages = await connection.search([['UID', uid]], { bodies: [''], markSeen: false });
+          
+          if (messages.length === 0) {
+              connection.end();
+              return res.status(404).send("File not found");
+          }
+
+          const rawContent = messages[0].parts.find(p => p.which === '').body;
+          const parsed = await simpleParser(rawContent);
+          const targetAttachment = parsed.attachments.find(att => att.filename === filename);
+          
+          if (targetAttachment) {
+              fileBuffer = targetAttachment.content; 
+              mimeType = targetAttachment.contentType || mimeType;
+          }
+      }
+
       connection.end();
-      return res.status(404).send("File not found");
-    }
 
-    const partData = messages[0].parts.find((p) => p.which === partId);
+      if (!fileBuffer) {
+          return res.status(404).send("Attachment data not found.");
+      }
 
-    if (!partData || !partData.body) {
-      connection.end();
-      return res.status(404).send("Empty attachment");
-    }
+      // Tentukan Content-Disposition berdasarkan MODE
+      // inline = Preview di browser
+      // attachment = Download paksa
+      const dispositionType = mode === 'preview' ? 'inline' : 'attachment';
 
-    // Biasanya attachment dikirim dalam base64 text
-    // Kita harus decode menjadi binary buffer
-    const rawBody = partData.body;
-    // Bersihkan whitespace/newline jika ada
-    const cleanBody = rawBody.replace(/\r?\n|\r/g, "");
-    const fileBuffer = Buffer.from(cleanBody, "base64");
+      res.setHeader('Content-Type', mimeType);
+      res.setHeader('Content-Disposition', `${dispositionType}; filename="${filename || 'download'}"`);
+      res.setHeader('Content-Length', fileBuffer.length);
+      return res.end(fileBuffer);
 
-    connection.end();
-
-    // Set Headers untuk Download
-    res.setHeader("Content-Type", "application/octet-stream");
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="${filename || "download"}"`
-    );
-    res.setHeader("Content-Length", fileBuffer.length);
-
-    // Kirim Buffer
-    return res.end(fileBuffer);
   } catch (error) {
-    if (connection) connection.end();
-    console.error("Attachment Error:", error);
-    return res.status(500).send("Gagal download attachment");
+      if (connection) connection.end();
+      console.error("Attachment Error:", error);
+      return res.status(500).send("Gagal download attachment");
   }
 });
 
