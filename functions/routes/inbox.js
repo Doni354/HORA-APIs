@@ -6,6 +6,7 @@ const { verifyToken } = require("../middleware/token"); // Middleware kamu yang 
 const { encrypt, decrypt } = require("../helper/security");
 const imap = require("imap-simple");
 const simpleParser = require("mailparser").simpleParser;
+const nodemailer = require("nodemailer");
 // ---------------------------------------------------------
 // ADD EMAIL ACCOUNT (Connect New Account)
 // ---------------------------------------------------------
@@ -760,4 +761,125 @@ router.get("/message-body", verifyToken, async (req, res) => {
   }
 });
 
+// Helper: Tentukan Host SMTP berdasarkan provider
+const getSmtpConfig = (provider) => {
+  switch (provider) {
+    case "gmail": 
+        return { host: "smtp.gmail.com", port: 465, secure: true };
+    case "yahoo": 
+        return { host: "smtp.mail.yahoo.com", port: 465, secure: true };
+    case "outlook": 
+        return { host: "smtp.office365.com", port: 587, secure: false }; // Outlook biasanya STARTTLS
+    case "icloud": 
+        return { host: "smtp.mail.me.com", port: 587, secure: false };
+    case "yandex": 
+        return { host: "smtp.yandex.com", port: 465, secure: true };
+    default: 
+        return null;
+  }
+};
+
+// ---------------------------------------------------------
+// SEND EMAIL (Kirim Email Baru / Reply)
+// ---------------------------------------------------------
+router.post("/send", verifyToken, async (req, res) => {
+  try {
+    // Input dari Frontend
+    // replyToMessageId: Opsional, diisi jika ini adalah email balasan (agar masuk thread)
+    const { fromAccount, to, cc, bcc, subject, message, replyToMessageId, attachments } = req.body;
+    const userId = req.user.email;
+
+    // 1. Validasi Input Dasar
+    if (!fromAccount || !to || !subject || !message) {
+      return res.status(400).json({ message: "Data pengiriman (from, to, subject, message) wajib diisi." });
+    }
+
+    // 2. Ambil Kredensial Pengirim dari Database
+    const accRef = db.collection("users").doc(userId).collection("mail_accounts").doc(fromAccount);
+    const accDoc = await accRef.get();
+
+    if (!accDoc.exists) {
+      return res.status(404).json({ message: "Akun pengirim tidak ditemukan atau belum terhubung." });
+    }
+
+    const accData = accDoc.data();
+    
+    // Decrypt Password (App Password)
+    let password;
+    try {
+        password = decrypt(accData.encryptedCredentials);
+    } catch (e) {
+        return res.status(500).json({ message: "Gagal memproses kredensial akun." });
+    }
+
+    // 3. Konfigurasi Transporter (Tukang Pos)
+    const smtpConfig = getSmtpConfig(accData.provider);
+    
+    if (!smtpConfig) {
+        return res.status(400).json({ message: `Provider ${accData.provider} tidak didukung untuk pengiriman.` });
+    }
+
+    const transporter = nodemailer.createTransport({
+      host: smtpConfig.host,
+      port: smtpConfig.port,
+      secure: smtpConfig.secure, // true for 465, false for other ports
+      auth: {
+        user: accData.email,
+        pass: password,
+      },
+      tls: {
+        rejectUnauthorized: false // Biar gak rewel soal sertifikat di dev env
+      }
+    });
+
+    // 4. Siapkan Opsi Email
+    const mailOptions = {
+      from: `"${req.user.nama || 'User'}" <${accData.email}>`, // Format: "Nama User" <email@gmail.com>
+      to: to, // Bisa string "a@b.com" atau array ["a@b.com", "c@d.com"]
+      subject: subject,
+      html: message, // Kita anggap message dikirim dalam format HTML (dari Rich Text Editor)
+      text: message.replace(/<[^>]*>?/gm, ''), // Fallback plain text (strip HTML tags)
+    };
+
+    // Opsional: CC & BCC
+    if (cc) mailOptions.cc = cc;
+    if (bcc) mailOptions.bcc = bcc;
+
+    // Opsional: Threading (Reply)
+    // Agar Gmail menganggap ini balasan, kita perlu set In-Reply-To dan References
+    if (replyToMessageId) {
+        mailOptions.inReplyTo = replyToMessageId;
+        mailOptions.references = [replyToMessageId]; 
+        // Note: Idealnya 'references' berisi list ID dari email sebelumnya juga, 
+        // tapi minimal ID terakhir sudah cukup untuk grouping sederhana.
+    }
+
+    // Opsional: Attachments (Jika Frontend kirim array of objects)
+    // Format FE: attachments: [{ filename: "foto.jpg", content: "base64string...", encoding: "base64" }]
+    // ATAU: attachments: [{ filename: "doc.pdf", path: "https://url-ke-file-publik" }]
+    if (attachments && Array.isArray(attachments) && attachments.length > 0) {
+        mailOptions.attachments = attachments;
+    }
+
+    // 5. Kirim!
+    const info = await transporter.sendMail(mailOptions);
+
+    console.log(`Email terkirim dari ${fromAccount} ke ${to}. MessageID: ${info.messageId}`);
+
+    // 6. Return Success
+    return res.status(200).json({ 
+      message: "Email berhasil dikirim!", 
+      messageId: info.messageId,
+      preview: nodemailer.getTestMessageUrl(info) // URL preview (biasanya null di production send)
+    });
+
+  } catch (error) {
+    console.error("Send Mail Error:", error);
+    return res.status(500).json({ 
+      message: "Gagal mengirim email.", 
+      error: error.message,
+      detail: "Pastikan App Password valid dan tidak ada limitasi harian."
+    });
+  }
+});
 module.exports = router;

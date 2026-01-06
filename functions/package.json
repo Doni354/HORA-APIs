@@ -25,7 +25,8 @@
     "firebase-functions": "^6.0.1",
     "formidable": "^3.5.1",
     "imap-simple": "^5.1.0",
-    "mailparser": "^3.9.1"
+    "mailparser": "^3.9.1",
+    "nodemailer": "^7.0.12"
   },
   "devDependencies": {
     "eslint": "^8.15.0",
