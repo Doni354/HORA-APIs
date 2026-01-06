@@ -361,14 +361,15 @@ router.get("/messages", verifyToken, async (req, res) => {
         const id = item.attributes.uid;
         const headerPart = item.parts.find((part) => part.which === "HEADER");
         const headerBody = headerPart && headerPart.body ? headerPart.body : {};
+        const flags = item.attributes.flags || [];
 
         return {
           id: id,
           subject: headerBody.subject ? headerBody.subject[0] : "(No Subject)",
           from: headerBody.from ? headerBody.from[0] : "Unknown",
           date: headerBody.date ? headerBody.date[0] : "",
-          isRead:
-            item.attributes.flags && item.attributes.flags.includes("\\Seen"),
+          isRead: flags.includes("\\Seen"),     // Check Read Status
+          isStarred: flags.includes("\\Flagged"), // Check Star Status
           snippet: "Tap to read...",
         };
       })
@@ -547,13 +548,15 @@ router.get("/message-detail", verifyToken, async (req, res) => {
     }
 
     connection.end();
-
+    const flags = item.attributes.flags || [];
     return res.status(200).json({ 
         id: item.attributes.uid,
         subject: subject,
         from: from,
         to: to,
         date: date,
+        isRead: true,
+        isStarred: flags.includes("\\Flagged"),
         attachments: attachments,
         replies: replies, 
         contentUrlParams: {
@@ -880,6 +883,191 @@ router.post("/send", verifyToken, async (req, res) => {
       error: error.message,
       detail: "Pastikan App Password valid dan tidak ada limitasi harian."
     });
+  }
+});
+
+// ---------------------------------------------------------
+// FORWARD EMAIL (Server-Side: Auto Attach Original Files)
+// ---------------------------------------------------------
+router.post("/forward", verifyToken, async (req, res) => {
+  let imapConnection;
+  try {
+      const { fromAccount, to, originalUid, originalFolder, addedMessage } = req.body;
+      const userId = req.user.email;
+
+      if (!fromAccount || !to || !originalUid || !originalFolder) {
+          return res.status(400).json({ message: "Data forward tidak lengkap." });
+      }
+
+      // 1. Ambil Kredensial
+      const accRef = db.collection("users").doc(userId).collection("mail_accounts").doc(fromAccount);
+      const accDoc = await accRef.get();
+      if (!accDoc.exists) return res.status(404).json({ message: "Akun pengirim tidak ditemukan." });
+      const accData = accDoc.data();
+      let password;
+      try { password = decrypt(accData.encryptedCredentials); } 
+      catch (e) { return res.status(500).json({ message: "Gagal dekripsi password." }); }
+
+      // 2. Fetch Original Email (Full Raw) untuk diambil attachment-nya
+      const imapConfig = {
+          imap: {
+              user: accData.email,
+              password: password,
+              host: getSmtpConfig(accData.provider)?.host.replace("smtp.", "imap."),
+              port: 993,
+              tls: true,
+              tlsOptions: { rejectUnauthorized: false },
+              authTimeout: 20000,
+          },
+      };
+      if(accData.provider === 'outlook') imapConfig.imap.host = 'outlook.office365.com';
+
+      imapConnection = await imap.connect(imapConfig);
+      const boxName = getBoxName(accData.provider, originalFolder);
+      
+      try { await imapConnection.openBox(boxName); } 
+      catch(e) { await imapConnection.openBox("INBOX"); }
+
+      const messages = await imapConnection.search([['UID', originalUid]], { bodies: [''], markSeen: false });
+      
+      if (messages.length === 0) {
+          imapConnection.end();
+          return res.status(404).json({ message: "Email asli tidak ditemukan." });
+      }
+
+      const rawContent = messages[0].parts.find(p => p.which === '').body;
+      imapConnection.end();
+
+      // 3. Parse Email Asli
+      const parsed = await simpleParser(rawContent);
+      
+      // 4. Siapkan Attachment Asli
+      // Kita ubah format mailparser (buffer) menjadi format nodemailer
+      const forwardingAttachments = parsed.attachments.map(att => ({
+          filename: att.filename,
+          content: att.content, // Buffer
+          contentType: att.contentType
+      }));
+
+      // 5. Susun Konten Forward
+      const originalDate = parsed.date ? parsed.date.toLocaleString() : "Unknown Date";
+      const originalFrom = parsed.from ? parsed.from.text : "Unknown";
+      const originalSubject = parsed.subject || "(No Subject)";
+      
+      const forwardSubject = `Fwd: ${originalSubject}`;
+      const forwardBody = `
+          ${addedMessage || ''}<br><br>
+          <div class="gmail_quote">
+              ---------- Forwarded message ---------<br>
+              From: <strong>${originalFrom}</strong><br>
+              Date: ${originalDate}<br>
+              Subject: ${originalSubject}<br>
+              To: ${parsed.to ? parsed.to.text : ''}<br><br>
+          </div>
+          ${parsed.html || parsed.textAsHtml || `<pre>${parsed.text}</pre>`}
+      `;
+
+      // 6. Kirim Email Forward
+      const smtpConfig = getSmtpConfig(accData.provider);
+      const transporter = nodemailer.createTransport({
+          host: smtpConfig.host,
+          port: smtpConfig.port,
+          secure: smtpConfig.secure,
+          auth: { user: accData.email, pass: password },
+          tls: { rejectUnauthorized: false }
+      });
+
+      await transporter.sendMail({
+          from: `"${req.user.nama || 'User'}" <${accData.email}>`,
+          to: to,
+          subject: forwardSubject,
+          html: forwardBody,
+          attachments: forwardingAttachments // Sertakan file asli
+      });
+
+      return res.status(200).json({ message: "Email berhasil diteruskan!" });
+
+  } catch (error) {
+      if(imapConnection) imapConnection.end();
+      console.error("Forward Error:", error);
+      return res.status(500).json({ message: "Gagal meneruskan email.", error: error.message });
+  }
+});
+
+// ---------------------------------------------------------
+// TOGGLE STAR (BINTANG)
+// ---------------------------------------------------------
+router.post("/star", verifyToken, async (req, res) => {
+  let connection;
+  try {
+      // action: 'add' (Bintang) atau 'remove' (Hapus Bintang)
+      const { emailAccount, folder, uid, action } = req.body; 
+      const userId = req.user.email;
+
+      if (!emailAccount || !uid || !action) {
+          return res.status(400).json({ message: "Parameter tidak lengkap." });
+      }
+
+      const connResult = await connectToImap(userId, emailAccount);
+      connection = connResult.connection;
+      const accData = connResult.accData;
+
+      let boxName = getBoxName(accData.provider, folder);
+      try { await connection.openBox(boxName); } 
+      catch (e) { await connection.openBox("INBOX"); }
+
+      // Flag untuk Bintang di IMAP adalah "\Flagged"
+      const flag = "\\Flagged";
+
+      if (action === 'add') {
+          await connection.addFlags(uid, flag);
+          console.log(`Email ${uid} dibintangi.`);
+      } else {
+          await connection.delFlags(uid, flag);
+          console.log(`Bintang email ${uid} dihapus.`);
+      }
+
+      connection.end();
+      return res.status(200).json({ message: `Berhasil ${action === 'add' ? 'menambahkan' : 'menghapus'} bintang.` });
+
+  } catch (error) {
+      if(connection) connection.end();
+      console.error("Star Error:", error);
+      return res.status(500).json({ message: "Gagal memproses bintang", error: error.message });
+  }
+});
+
+// ---------------------------------------------------------
+// BONUS: MARK AS READ / UNREAD
+// ---------------------------------------------------------
+router.post("/mark-read", verifyToken, async (req, res) => {
+  let connection;
+  try {
+      const { emailAccount, folder, uid, isRead } = req.body; 
+      const userId = req.user.email;
+
+      const connResult = await connectToImap(userId, emailAccount);
+      connection = connResult.connection;
+      const accData = connResult.accData;
+
+      let boxName = getBoxName(accData.provider, folder);
+      try { await connection.openBox(boxName); } 
+      catch (e) { await connection.openBox("INBOX"); }
+
+      const flag = "\\Seen"; // Flag untuk status "Sudah Dibaca"
+
+      if (isRead) {
+          await connection.addFlags(uid, flag);
+      } else {
+          await connection.delFlags(uid, flag);
+      }
+
+      connection.end();
+      return res.status(200).json({ message: "Status pesan diperbarui." });
+
+  } catch (error) {
+      if(connection) connection.end();
+      return res.status(500).json({ message: "Gagal update status", error: error.message });
   }
 });
 module.exports = router;
