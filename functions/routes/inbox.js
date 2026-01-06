@@ -231,6 +231,27 @@ const getBoxName = (provider, folderType) => {
   }
 };
 
+// --- HELPER PROMISIFY: MOVE & COPY ---
+// Karena imap-simple tidak punya moveMessage/copyMessage, kita buat wrapper sendiri
+// menggunakan underlying 'node-imap' driver (connection.imap)
+const moveEmail = (connection, uid, destination) => {
+  return new Promise((resolve, reject) => {
+      // node-imap move(uid, boxToMoveTo, callback)
+      connection.imap.move(uid, destination, (err) => {
+          if (err) return reject(err);
+          resolve();
+      });
+  });
+};
+
+const copyEmail = (connection, uid, destination) => {
+  return new Promise((resolve, reject) => {
+      connection.imap.copy(uid, destination, (err) => {
+          if (err) return reject(err);
+          resolve();
+      });
+  });
+};
 // ---------------------------------------------------------
 // ROUTE: CEK DAFTAR FOLDER
 // ---------------------------------------------------------
@@ -1068,6 +1089,110 @@ router.post("/mark-read", verifyToken, async (req, res) => {
   } catch (error) {
       if(connection) connection.end();
       return res.status(500).json({ message: "Gagal update status", error: error.message });
+  }
+});
+
+// ---------------------------------------------------------
+// 3. DELETE MESSAGE (Move to Trash / Delete Forever)
+// ---------------------------------------------------------
+router.post("/delete", verifyToken, async (req, res) => {
+  let connection;
+  try {
+      const { emailAccount, folder, uid } = req.body;
+      const userId = req.user.email;
+
+      if (!emailAccount || !uid || !folder) return res.status(400).json({ message: "Parameter tidak lengkap." });
+
+      const connResult = await connectToImap(userId, emailAccount);
+      connection = connResult.connection;
+      const accData = connResult.accData;
+
+      // Dapatkan nama folder saat ini dan folder sampah
+      let currentBox = getBoxName(accData.provider, folder);
+      let trashBox = getBoxName(accData.provider, "sampah");
+
+      // Buka folder saat ini
+      try { await connection.openBox(currentBox); } 
+      catch (e) { return res.status(404).json({ message: "Folder tidak ditemukan" }); }
+
+      // LOGIKA PENGHAPUSAN
+      if (currentBox === trashBox) {
+          // KASUS A: Sudah di Tong Sampah -> Hapus Permanen
+          await connection.addFlags(uid, "\\Deleted");
+          // Expunge untuk menghapus permanen
+          try { 
+              await new Promise((resolve, reject) => {
+                  connection.imap.expunge((err) => err ? reject(err) : resolve());
+              });
+          } catch(e) {} 
+          
+          connection.end();
+          return res.status(200).json({ message: "Pesan dihapus permanen." });
+
+      } else {
+          // KASUS B: Belum di Tong Sampah -> Pindahkan ke Tong Sampah
+          try {
+              // Panggil Helper MOVE buatan kita
+              await moveEmail(connection, uid, trashBox);
+              
+              connection.end();
+              return res.status(200).json({ message: "Pesan dipindahkan ke Tong Sampah." });
+          } catch (moveErr) {
+              console.log("Move failed, trying Copy+Delete:", moveErr.message);
+              
+              // Fallback: Copy ke Trash lalu tandai Deleted di folder asal
+              try {
+                  await copyEmail(connection, uid, trashBox);
+                  await connection.addFlags(uid, "\\Deleted");
+                  connection.end();
+                  return res.status(200).json({ message: "Pesan dipindahkan ke Tong Sampah." });
+              } catch (copyErr) {
+                  connection.end();
+                  return res.status(500).json({ message: "Gagal memindahkan pesan.", error: copyErr.message });
+              }
+          }
+      }
+
+  } catch (error) {
+      if(connection) connection.end();
+      console.error("Delete Error:", error);
+      return res.status(500).json({ message: "Gagal menghapus pesan", error: error.message });
+  }
+});
+
+// ---------------------------------------------------------
+// 4. EMPTY TRASH (Kosongkan Tong Sampah)
+// ---------------------------------------------------------
+router.post("/empty-trash", verifyToken, async (req, res) => {
+  let connection;
+  try {
+      const { emailAccount } = req.body;
+      const userId = req.user.email;
+
+      const connResult = await connectToImap(userId, emailAccount);
+      connection = connResult.connection;
+      const accData = connResult.accData;
+
+      let trashBox = getBoxName(accData.provider, "sampah");
+      
+      try { await connection.openBox(trashBox); } 
+      catch (e) { return res.status(404).json({ message: "Folder sampah tidak ditemukan" }); }
+
+      try {
+          await connection.addFlags('1:*', "\\Deleted");
+          await new Promise((resolve, reject) => {
+              connection.imap.expunge((err) => err ? reject(err) : resolve());
+          });
+      } catch (e) {
+          // Ignore error if empty
+      }
+
+      connection.end();
+      return res.status(200).json({ message: "Tong sampah berhasil dikosongkan." });
+
+  } catch (error) {
+      if(connection) connection.end();
+      return res.status(500).json({ message: "Gagal mengosongkan sampah", error: error.message });
   }
 });
 module.exports = router;
