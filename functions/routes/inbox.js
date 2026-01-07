@@ -104,6 +104,51 @@ router.post("/add-account", verifyToken, async (req, res) => {
 });
 
 // ---------------------------------------------------------
+// GET ALL CONNECTED ACCOUNTS (List Accounts)
+// ---------------------------------------------------------
+router.get("/accounts", verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.email; // ID User dari Token
+
+    // Ambil referensi ke collection mail_accounts milik user
+    const accountsRef = db
+      .collection("users")
+      .doc(userId)
+      .collection("mail_accounts");
+
+    const snapshot = await accountsRef.get();
+
+    // Jika belum ada akun terhubung
+    if (snapshot.empty) {
+      return res.status(200).json({ 
+        message: "Belum ada akun terhubung", 
+        data: [] 
+      });
+    }
+
+    let accounts = [];
+
+    snapshot.forEach((doc) => {
+      let data = doc.data();
+
+      // SECURITY: Hapus password terenkripsi sebelum dikirim ke client
+      // Frontend tidak butuh password ini, hanya butuh status & emailnya.
+      delete data.encryptedCredentials; 
+
+      accounts.push(data);
+    });
+
+    return res.status(200).json({
+      message: "Berhasil mengambil data akun",
+      data: accounts, // Array berisi daftar akun
+    });
+
+  } catch (error) {
+    console.error("Error Get Accounts:", error);
+    return res.status(500).json({ message: "Server Error saat mengambil data" });
+  }
+});
+// ---------------------------------------------------------
 // HELPER: Connection Logic
 // ---------------------------------------------------------
 const connectToImap = async (userId, emailAccount) => {
