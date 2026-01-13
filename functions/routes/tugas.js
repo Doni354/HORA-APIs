@@ -39,7 +39,7 @@ const prepareAttachment = async (idCompany, text, fileId, user) => {
   if (!text && !fileData) return null;
 
   const attachmentId = db.collection("_").doc().id;
-  
+
   return {
     id: attachmentId,
     type: fileData ? "file" : "text",
@@ -90,7 +90,9 @@ router.get("/list", verifyToken, async (req, res) => {
     });
   } catch (error) {
     console.error("Error Get List Task:", error);
-    return res.status(500).json({ message: "Server Error", error: error.message });
+    return res
+      .status(500)
+      .json({ message: "Server Error", error: error.message });
   }
 });
 
@@ -159,7 +161,9 @@ router.post("/create", verifyToken, async (req, res) => {
       actorName: adminName || "Admin",
       target: assignedTo,
       action: "CREATE_TASK",
-      description: `Membuat tugas baru untuk ${targetUserData.username || assignedTo}`,
+      description: `Membuat tugas baru untuk ${
+        targetUserData.username || assignedTo
+      }`,
     });
 
     return res.status(201).json({
@@ -187,8 +191,10 @@ router.post("/add-attachment", verifyToken, async (req, res) => {
     const { taskId, text, fileId } = req.body;
     const { idCompany, email, nama } = req.user;
 
-    if (!taskId) return res.status(400).json({ message: "Task ID wajib diisi." });
-    if (!text && !fileId) return res.status(400).json({ message: "Isi text atau fileId." });
+    if (!taskId)
+      return res.status(400).json({ message: "Task ID wajib diisi." });
+    if (!text && !fileId)
+      return res.status(400).json({ message: "Isi text atau fileId." });
 
     const taskRef = db
       .collection("companies")
@@ -202,10 +208,17 @@ router.post("/add-attachment", verifyToken, async (req, res) => {
     }
 
     // 1. Prepare Attachment (Pake Helper)
-    const newAttachment = await prepareAttachment(idCompany, text, fileId, req.user);
-    
+    const newAttachment = await prepareAttachment(
+      idCompany,
+      text,
+      fileId,
+      req.user
+    );
+
     if (!newAttachment) {
-      return res.status(400).json({ message: "File tidak ditemukan atau input kosong." });
+      return res
+        .status(400)
+        .json({ message: "File tidak ditemukan atau input kosong." });
     }
 
     // 2. Update Database
@@ -249,14 +262,15 @@ router.post("/update-status", verifyToken, async (req, res) => {
 
     // Mapping Status Text ke Code
     const statusMap = {
-      "Proses": 1,
-      "Tunda": 2,
-      "Selesai": 3
+      Proses: 1,
+      Tunda: 2,
+      Selesai: 3,
     };
 
     if (!taskId || !status || !statusMap[status]) {
-      return res.status(400).json({ 
-        message: "Task ID dan Status (Proses, Tunda, Selesai) valid wajib diisi." 
+      return res.status(400).json({
+        message:
+          "Task ID dan Status (Proses, Tunda, Selesai) valid wajib diisi.",
       });
     }
 
@@ -279,75 +293,93 @@ router.post("/update-status", verifyToken, async (req, res) => {
     // -----------------------------------------------------
     // 1. Proses -> Tunda (Submit Review): Staff & Admin Boleh
     if (currentStatus === "Proses" && status === "Tunda") {
-        // Allowed for everyone involved
+      // Allowed for everyone involved
     }
     // 2. Tunda -> Proses (Revisi): Admin Only
     else if (currentStatus === "Tunda" && status === "Proses") {
-        if (role !== "admin") {
-            return res.status(403).json({ message: "Hanya Admin yang dapat mengembalikan status ke Proses (Revisi)." });
-        }
+      if (role !== "admin") {
+        return res
+          .status(403)
+          .json({
+            message:
+              "Hanya Admin yang dapat mengembalikan status ke Proses (Revisi).",
+          });
+      }
     }
     // 3. Tunda -> Selesai (Approve): Admin Only
     else if (currentStatus === "Tunda" && status === "Selesai") {
-        if (role !== "admin") {
-            return res.status(403).json({ message: "Hanya Admin yang dapat menyelesaikan tugas." });
-        }
+      if (role !== "admin") {
+        return res
+          .status(403)
+          .json({ message: "Hanya Admin yang dapat menyelesaikan tugas." });
+      }
     }
     // 4. Status Sama (Cuma update attachment mungkin?) - Boleh
     else if (currentStatus === status) {
-       // Pass
+      // Pass
     }
     // 5. Flow lain yang tidak diizinkan (Misal: Selesai -> Tunda, atau Staff langsung ke Selesai)
     else {
-        // Jika Staff mencoba langsung Proses -> Selesai (Skip Tunda)
-        if (role !== "admin" && status === "Selesai") {
-             return res.status(403).json({ message: "Staff harus mengubah status ke Tunda (Review) terlebih dahulu." });
-        }
-        // Admin bebas mengubah flow jika perlu (Opsional, tapi logic di atas sudah cover standard flow)
+      // Jika Staff mencoba langsung Proses -> Selesai (Skip Tunda)
+      if (role !== "admin" && status === "Selesai") {
+        return res
+          .status(403)
+          .json({
+            message:
+              "Staff harus mengubah status ke Tunda (Review) terlebih dahulu.",
+          });
+      }
+      // Admin bebas mengubah flow jika perlu (Opsional, tapi logic di atas sudah cover standard flow)
     }
 
     // -----------------------------------------------------
     // PROSES UPDATE
     // -----------------------------------------------------
     const updateData = {
-        status: status,
-        statusCode: statusMap[status],
-        updatedAt: Timestamp.now()
+      status: status,
+      statusCode: statusMap[status],
+      updatedAt: Timestamp.now(),
     };
 
     // Jika ada Attachment (Text / File) saat ganti status
     let newAttachment = null;
     if (text || fileId) {
-        newAttachment = await prepareAttachment(idCompany, text, fileId, req.user);
-        if (newAttachment) {
-            updateData.attachments = FieldValue.arrayUnion(newAttachment);
-        }
+      newAttachment = await prepareAttachment(
+        idCompany,
+        text,
+        fileId,
+        req.user
+      );
+      if (newAttachment) {
+        updateData.attachments = FieldValue.arrayUnion(newAttachment);
+      }
     }
 
     await taskRef.update(updateData);
 
     // LOG AKTIVITAS
     await logCompanyActivity(idCompany, {
-        actorEmail: email,
-        actorName: nama || "User",
-        target: taskId,
-        action: "UPDATE_STATUS_TASK",
-        description: `Mengubah status dari ${currentStatus} ke ${status}.`,
+      actorEmail: email,
+      actorName: nama || "User",
+      target: taskId,
+      action: "UPDATE_STATUS_TASK",
+      description: `Mengubah status dari ${currentStatus} ke ${status}.`,
     });
 
     return res.status(200).json({
-        message: `Status berhasil diubah ke ${status}.`,
-        data: {
-            taskId,
-            status,
-            statusCode: statusMap[status],
-            addedAttachment: newAttachment
-        }
+      message: `Status berhasil diubah ke ${status}.`,
+      data: {
+        taskId,
+        status,
+        statusCode: statusMap[status],
+        addedAttachment: newAttachment,
+      },
     });
-
   } catch (error) {
     console.error("Error Update Status:", error);
-    return res.status(500).json({ message: "Server Error", error: error.message });
+    return res
+      .status(500)
+      .json({ message: "Server Error", error: error.message });
   }
 });
 
