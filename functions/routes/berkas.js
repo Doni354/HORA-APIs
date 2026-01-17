@@ -10,13 +10,16 @@ const { Timestamp } = require("firebase-admin/firestore");
 const { uploadFileBerkas } = require("../helper/uploadFile");
 
 // ---------------------------------------------------------
-// 1. UPLOAD BERKAS BARU (Support Semua Tipe File)
+// POST /upload - Upload File dengan Kategori
 // ---------------------------------------------------------
+// URL: {{BaseUrl}}/api/files/upload?category=reimburse
 router.post("/upload", verifyToken, async (req, res) => {
   try {
     const user = req.user;
+    // Ambil category dari Query Param, default ke "general" jika kosong
+    const category = req.query.category || "general"; 
 
-    // 1. Validasi Akses: Staff & Admin boleh upload
+    // 1. Validasi Akses
     if (!["admin", "staff"].includes(user.role)) {
       return res.status(403).json({
         message: "Akses ditolak. Hanya Admin & Staff yang boleh upload.",
@@ -33,14 +36,20 @@ router.post("/upload", verifyToken, async (req, res) => {
 
     // 3. Simpan Metadata ke Firestore
     const newFileDoc = {
-      fileName: result.originalName, // Nama default pake nama asli file
+      fileName: result.originalName,
       storagePath: result.storagePath,
       downloadUrl: result.publicUrl,
       mimeType: result.mimeType,
       size: result.sizeDisplay,
+      sizeBytes: result.sizeBytes,
+      
+      // Metadata category
+      category: category, 
+      
       uploadedBy: user.email,
-      uploaderName: user.nama || "User", // Bisa Admin atau Staff
+      uploaderName: user.nama || "User",
       uploaderRole: user.role,
+      
       createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
     };
@@ -57,13 +66,12 @@ router.post("/upload", verifyToken, async (req, res) => {
       actorName: user.nama || "User",
       target: docRef.id,
       action: "UPLOAD_FILE",
-      description: `${user.nama || "User"} (${user.role}) mengupload berkas: ${
-        result.originalName
-      }`,
+      description: `Mengupload berkas (${category}): ${result.originalName}`,
     });
 
     return res.status(201).json({
       message: "Berkas berhasil diupload.",
+      fileId: docRef.id,
       data: {
         id: docRef.id,
         ...newFileDoc,
@@ -79,23 +87,33 @@ router.post("/upload", verifyToken, async (req, res) => {
 });
 
 // ---------------------------------------------------------
-// 2. GET ALL BERKAS (List Files)
+// GET /list - List Files (Filter by Category)
 // ---------------------------------------------------------
+// URL: {{BaseUrl}}/api/files/list?category=reimburse
+// URL: {{BaseUrl}}/api/files/list (Default: General + Null)
 router.get("/list", verifyToken, async (req, res) => {
   try {
     const user = req.user;
+    const categoryFilter = req.query.category; // Bisa string atau undefined
 
     if (!user.idCompany) {
       return res.status(400).json({ message: "ID Company tidak valid." });
     }
 
-    // Semua role (Admin & Staff) boleh melihat berkas
-    const snapshot = await db
+    let query = db
       .collection("companies")
       .doc(user.idCompany)
       .collection("files")
-      .orderBy("createdAt", "desc")
-      .get();
+      .orderBy("createdAt", "desc");
+
+    // OPTIMASI: Jika user minta kategori spesifik, kita filter langsung di query
+    if (categoryFilter) {
+      query = query.where("category", "==", categoryFilter);
+    }
+    // JIKA KOSONG: Kita ambil semua dulu (karena query OR null+general susah di Firestore bareng orderBy)
+    // Lalu kita filter di bawah.
+
+    const snapshot = await query.get();
 
     if (snapshot.empty) {
       return res.status(200).json({ message: "Belum ada berkas.", data: [] });
@@ -104,12 +122,26 @@ router.get("/list", verifyToken, async (req, res) => {
     const files = [];
     snapshot.forEach((doc) => {
       const data = doc.data();
+
+      // LOGIKA FILTER MANUAL (Untuk kasus Default/Kosong)
+      // Jika categoryFilter TIDAK ADA, kita hanya mau mengambil:
+      // 1. Data yang category-nya "general"
+      // 2. Data yang category-nya NULL/Undefined (legacy data)
+      if (!categoryFilter) {
+        // Jika data punya kategori DAN kategorinya bukan general, SKIP.
+        // (Berarti ini file reimburse/tugas dsb yang tidak boleh muncul di list general)
+        if (data.category && data.category !== "general") {
+          return; 
+        }
+      }
+
       files.push({
         id: doc.id,
         fileName: data.fileName,
         downloadUrl: data.downloadUrl,
         mimeType: data.mimeType,
         size: data.size,
+        category: data.category || "general", // Default tampilkan general jika null
         uploaderName: data.uploaderName,
         createdAt: data.createdAt ? data.createdAt.toDate() : null,
       });
@@ -124,7 +156,6 @@ router.get("/list", verifyToken, async (req, res) => {
     return res.status(500).json({ message: "Server Error" });
   }
 });
-
 // ---------------------------------------------------------
 // 3. EDIT NAMA BERKAS (Rename)
 // ---------------------------------------------------------
