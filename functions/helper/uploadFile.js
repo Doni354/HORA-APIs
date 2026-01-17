@@ -1,9 +1,23 @@
 /* eslint-disable */
-require("dotenv").config();
-const express = require("express");
 const Busboy = require("busboy");
 const path = require("path");
 const { bucket } = require("../config/firebase");
+
+// Helper sederhana untuk format size
+const formatFileSize = (bytes) => {
+  if (bytes === 0) return "0 B";
+
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB"];
+
+  // Mencari index satuan (0=B, 1=KB, 2=MB, dst)
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+
+  // Menghitung nilai sesuai satuan
+  const value = parseFloat((bytes / Math.pow(k, i)).toFixed(2));
+
+  return `${value} ${sizes[i]}`;
+};
 
 const uploadFile = (req, folderName, fileNameFunc) => {
   return new Promise((resolve, reject) => {
@@ -55,9 +69,6 @@ const uploadFile = (req, folderName, fileNameFunc) => {
 // ---------------------------------------------------------
 // HELPER: Upload File Berkas (Returns Detail Metadata)
 // ---------------------------------------------------------
-// Kita buat const khusus disini agar route handler bersih
-// dan mengembalikan data lengkap (Size, Original Name, URL)
-
 const uploadFileBerkas = (req, folderName) => {
   return new Promise((resolve, reject) => {
     const busboy = Busboy({ headers: req.headers });
@@ -81,7 +92,6 @@ const uploadFileBerkas = (req, folderName) => {
 
       try {
         // 1. Generate Nama File Unik
-        // Format: folder/{timestamp}_{safe_filename}
         const safeFileName = fileInfo.filename.replace(/[^a-zA-Z0-9.-]/g, "_");
         const storagePath = `${folderName}/${Date.now()}_${safeFileName}`;
 
@@ -95,9 +105,9 @@ const uploadFileBerkas = (req, folderName) => {
 
         const publicUrl = `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
 
-        // 3. Hitung Ukuran
+        // 3. Hitung Ukuran Dinamis (IMPROVED)
         const sizeBytes = fileBuffer.length;
-        const sizeMB = (sizeBytes / (1024 * 1024)).toFixed(2) + " MB";
+        const sizeDisplay = formatFileSize(sizeBytes); // Pakai helper di atas
 
         // Return Object Lengkap
         resolve({
@@ -105,7 +115,7 @@ const uploadFileBerkas = (req, folderName) => {
           storagePath,
           originalName: fileInfo.filename,
           mimeType: fileInfo.mimeType,
-          sizeDisplay: sizeMB,
+          sizeDisplay: sizeDisplay, // Contoh: "500 B", "12 KB", "1.5 MB"
           sizeBytes: sizeBytes,
         });
       } catch (e) {
