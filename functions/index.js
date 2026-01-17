@@ -14,6 +14,7 @@ const kontakRoutes = require("./routes/kontak");
 const arsipRoutes = require("./routes/arsip");
 const inboxRoutes = require("./routes/inbox");
 const tugasRoutes = require("./routes/tugas");
+const reimburseRoutes = require("./routes/reimburse");
 
 // ---------------------------------------------------------
 // Cloud Functions Global Config
@@ -43,6 +44,7 @@ app.use("/api/kontak", kontakRoutes);
 app.use("/api/arsip", arsipRoutes);
 app.use("/api/inbox", inboxRoutes);
 app.use("/api/tugas", tugasRoutes);
+app.use("/api/reimburse", reimburseRoutes)
 // ---------------------------------------------------------
 // TEST
 // ---------------------------------------------------------
