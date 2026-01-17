@@ -10,11 +10,9 @@ const { logCompanyActivity } = require("../helper/logCompanyActivity");
 // ---------------------------------------------------------
 // HELPER INTERNAL: Prepare Attachment Object
 // ---------------------------------------------------------
-// Digunakan oleh add-attachment dan update-status agar tidak duplikasi code
 const prepareAttachment = async (idCompany, text, fileId, user) => {
   let fileData = null;
 
-  // Lookup File jika fileId ada
   if (fileId) {
     const fileDoc = await db
       .collection("companies")
@@ -35,16 +33,15 @@ const prepareAttachment = async (idCompany, text, fileId, user) => {
     }
   }
 
-  // Jika tidak ada text dan tidak ada file valid, return null
   if (!text && !fileData) return null;
 
   const attachmentId = db.collection("_").doc().id;
-
+  
   return {
     id: attachmentId,
     type: fileData ? "file" : "text",
     text: text || "",
-    ...(fileData && { file: fileData }), // Spread operator conditional
+    ...(fileData && { file: fileData }), 
     senderEmail: user.email,
     senderName: user.username || user.nama || "User",
     senderRole: user.role,
@@ -53,7 +50,7 @@ const prepareAttachment = async (idCompany, text, fileId, user) => {
 };
 
 // ---------------------------------------------------------
-// GET /list - Get All Tasks (Admin sees all, User sees assigned)
+// GET /list - Get All Tasks (Calculates Overdue Status)
 // ---------------------------------------------------------
 router.get("/list", verifyToken, async (req, res) => {
   try {
@@ -63,9 +60,8 @@ router.get("/list", verifyToken, async (req, res) => {
       .collection("companies")
       .doc(idCompany)
       .collection("tasks")
-      .orderBy("updatedAt", "desc"); // Urutkan dari yg update terakhir
+      .orderBy("updatedAt", "desc"); 
 
-    // Jika bukan Admin, filter hanya tugas milik dia
     if (role !== "admin") {
       query = query.where("assignedTo", "==", email);
     }
@@ -76,13 +72,47 @@ router.get("/list", verifyToken, async (req, res) => {
       return res.status(200).json({ message: "Tidak ada tugas.", data: [] });
     }
 
-    const tasks = snapshot.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data(),
-      // Konversi Timestamp ke String untuk FE
-      createdAt: doc.data().createdAt?.toDate().toISOString(),
-      updatedAt: doc.data().updatedAt?.toDate().toISOString(),
-    }));
+    const now = new Date();
+
+    const tasks = snapshot.docs.map((doc) => {
+      const data = doc.data();
+      
+      // LOGIKA OVERDUE (REVISI)
+      let isOverdue = false;
+      let daysOverdue = 0;
+      let compareTime = now; // Default pembanding adalah waktu sekarang (untuk status Proses/Tunda)
+
+      // Hanya proses jika ada deadline
+      if (data.deadline) {
+        const deadlineDate = data.deadline.toDate();
+
+        // Jika status sudah Selesai, kita bandingkan Deadline dengan Waktu Penyelesaian (finishedAt)
+        // Jika finishedAt tidak ada (data lama), kita pakai updatedAt sebagai fallback
+        if (data.status === 'Selesai') {
+            compareTime = data.finishedAt ? data.finishedAt.toDate() : (data.updatedAt ? data.updatedAt.toDate() : now);
+        }
+
+        // Cek Kondisi Terlambat
+        if (compareTime > deadlineDate) {
+           isOverdue = true;
+           const diffTime = Math.abs(compareTime - deadlineDate);
+           daysOverdue = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+        }
+      }
+
+      return {
+        id: doc.id,
+        ...data,
+        isOverdue: isOverdue, // Boolean: true jika telat (baik masih proses maupun sudah selesai)
+        overdueInfo: isOverdue ? `Terlambat ${daysOverdue} hari` : null, 
+        
+        // Konversi Timestamp ke String ISO
+        createdAt: data.createdAt?.toDate().toISOString(),
+        updatedAt: data.updatedAt?.toDate().toISOString(),
+        finishedAt: data.finishedAt?.toDate().toISOString() || null, // Info kapan selesai
+        deadline: data.deadline?.toDate().toISOString() || null 
+      };
+    });
 
     return res.status(200).json({
       message: "Data tugas berhasil diambil.",
@@ -90,31 +120,38 @@ router.get("/list", verifyToken, async (req, res) => {
     });
   } catch (error) {
     console.error("Error Get List Task:", error);
-    return res
-      .status(500)
-      .json({ message: "Server Error", error: error.message });
+    return res.status(500).json({ message: "Server Error", error: error.message });
   }
 });
 
 // ---------------------------------------------------------
-// POST /create - Create New Task (JSON Body)
+// POST /create - Create New Task (With Optional Deadline)
 // ---------------------------------------------------------
 router.post("/create", verifyToken, async (req, res) => {
   try {
-    // 1. Validasi Admin
     if (!req.user || req.user.role !== "admin") {
       return res.status(403).json({
         message: "Akses ditolak. Hanya Admin yang dapat membuat tugas.",
       });
     }
 
-    const { assignedTo, description } = req.body;
+    const { assignedTo, description, deadline } = req.body; 
     const { idCompany, email: adminEmail, nama: adminName } = req.user;
 
     if (!assignedTo || !description) {
       return res.status(400).json({
         message: "AssignedTo (Email User) dan Description wajib diisi.",
       });
+    }
+
+    // 1. Validasi Deadline (Opsional)
+    let deadlineTimestamp = null;
+    if (deadline) {
+       const dateCheck = new Date(deadline);
+       if (isNaN(dateCheck.getTime())) {
+          return res.status(400).json({ message: "Format deadline tidak valid. Gunakan ISO 8601." });
+       }
+       deadlineTimestamp = Timestamp.fromDate(dateCheck);
     }
 
     // 2. Validasi User Target
@@ -145,6 +182,10 @@ router.post("/create", verifyToken, async (req, res) => {
       status: "Proses",
       statusCode: 1,
       attachments: [],
+      
+      deadline: deadlineTimestamp,
+      finishedAt: null, // Default null saat baru dibuat
+      
       createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
     };
@@ -161,9 +202,7 @@ router.post("/create", verifyToken, async (req, res) => {
       actorName: adminName || "Admin",
       target: assignedTo,
       action: "CREATE_TASK",
-      description: `Membuat tugas baru untuk ${
-        targetUserData.username || assignedTo
-      }`,
+      description: `Membuat tugas baru untuk ${targetUserData.username || assignedTo}`,
     });
 
     return res.status(201).json({
@@ -173,6 +212,7 @@ router.post("/create", verifyToken, async (req, res) => {
         id: docRef.id,
         ...newTask,
         createdAt: new Date().toISOString(),
+        deadline: deadline ? deadlineTimestamp.toDate().toISOString() : null
       },
     });
   } catch (error) {
@@ -184,17 +224,15 @@ router.post("/create", verifyToken, async (req, res) => {
 });
 
 // ---------------------------------------------------------
-// POST /add-attachment - JSON Body (Relasi ke File ID)
+// POST /add-attachment
 // ---------------------------------------------------------
 router.post("/add-attachment", verifyToken, async (req, res) => {
   try {
     const { taskId, text, fileId } = req.body;
     const { idCompany, email, nama } = req.user;
 
-    if (!taskId)
-      return res.status(400).json({ message: "Task ID wajib diisi." });
-    if (!text && !fileId)
-      return res.status(400).json({ message: "Isi text atau fileId." });
+    if (!taskId) return res.status(400).json({ message: "Task ID wajib diisi." });
+    if (!text && !fileId) return res.status(400).json({ message: "Isi text atau fileId." });
 
     const taskRef = db
       .collection("companies")
@@ -207,27 +245,17 @@ router.post("/add-attachment", verifyToken, async (req, res) => {
       return res.status(404).json({ message: "Tugas tidak ditemukan." });
     }
 
-    // 1. Prepare Attachment (Pake Helper)
-    const newAttachment = await prepareAttachment(
-      idCompany,
-      text,
-      fileId,
-      req.user
-    );
-
+    const newAttachment = await prepareAttachment(idCompany, text, fileId, req.user);
+    
     if (!newAttachment) {
-      return res
-        .status(400)
-        .json({ message: "File tidak ditemukan atau input kosong." });
+      return res.status(400).json({ message: "File tidak ditemukan atau input kosong." });
     }
 
-    // 2. Update Database
     await taskRef.update({
       attachments: FieldValue.arrayUnion(newAttachment),
       updatedAt: Timestamp.now(),
     });
 
-    // 3. LOG AKTIVITAS
     await logCompanyActivity(idCompany, {
       actorEmail: email,
       actorName: nama || "User",
@@ -252,25 +280,22 @@ router.post("/add-attachment", verifyToken, async (req, res) => {
 });
 
 // ---------------------------------------------------------
-// POST /update-status - Update Status & Optional Attachment
+// POST /update-status
 // ---------------------------------------------------------
-// Body: { taskId, status: "Proses"|"Tunda"|"Selesai", text?, fileId? }
 router.post("/update-status", verifyToken, async (req, res) => {
   try {
     const { taskId, status, text, fileId } = req.body;
     const { idCompany, email, role, nama } = req.user;
 
-    // Mapping Status Text ke Code
     const statusMap = {
-      Proses: 1,
-      Tunda: 2,
-      Selesai: 3,
+      "Proses": 1,
+      "Tunda": 2,
+      "Selesai": 3
     };
 
     if (!taskId || !status || !statusMap[status]) {
-      return res.status(400).json({
-        message:
-          "Task ID dan Status (Proses, Tunda, Selesai) valid wajib diisi.",
+      return res.status(400).json({ 
+        message: "Task ID dan Status (Proses, Tunda, Selesai) valid wajib diisi." 
       });
     }
 
@@ -288,98 +313,71 @@ router.post("/update-status", verifyToken, async (req, res) => {
     const taskData = taskDoc.data();
     const currentStatus = taskData.status;
 
-    // -----------------------------------------------------
     // VALIDASI LOGIKA STATUS
-    // -----------------------------------------------------
-    // 1. Proses -> Tunda (Submit Review): Staff & Admin Boleh
     if (currentStatus === "Proses" && status === "Tunda") {
-      // Allowed for everyone involved
+        // OK
     }
-    // 2. Tunda -> Proses (Revisi): Admin Only
     else if (currentStatus === "Tunda" && status === "Proses") {
-      if (role !== "admin") {
-        return res
-          .status(403)
-          .json({
-            message:
-              "Hanya Admin yang dapat mengembalikan status ke Proses (Revisi).",
-          });
-      }
+        if (role !== "admin") {
+            return res.status(403).json({ message: "Hanya Admin yang dapat mengembalikan status ke Proses (Revisi)." });
+        }
     }
-    // 3. Tunda -> Selesai (Approve): Admin Only
     else if (currentStatus === "Tunda" && status === "Selesai") {
-      if (role !== "admin") {
-        return res
-          .status(403)
-          .json({ message: "Hanya Admin yang dapat menyelesaikan tugas." });
-      }
+        if (role !== "admin") {
+            return res.status(403).json({ message: "Hanya Admin yang dapat menyelesaikan tugas." });
+        }
     }
-    // 4. Status Sama (Cuma update attachment mungkin?) - Boleh
     else if (currentStatus === status) {
-      // Pass
+       // OK
     }
-    // 5. Flow lain yang tidak diizinkan (Misal: Selesai -> Tunda, atau Staff langsung ke Selesai)
     else {
-      // Jika Staff mencoba langsung Proses -> Selesai (Skip Tunda)
-      if (role !== "admin" && status === "Selesai") {
-        return res
-          .status(403)
-          .json({
-            message:
-              "Staff harus mengubah status ke Tunda (Review) terlebih dahulu.",
-          });
-      }
-      // Admin bebas mengubah flow jika perlu (Opsional, tapi logic di atas sudah cover standard flow)
+        if (role !== "admin" && status === "Selesai") {
+             return res.status(403).json({ message: "Staff harus mengubah status ke Tunda (Review) terlebih dahulu." });
+        }
     }
 
-    // -----------------------------------------------------
-    // PROSES UPDATE
-    // -----------------------------------------------------
     const updateData = {
-      status: status,
-      statusCode: statusMap[status],
-      updatedAt: Timestamp.now(),
+        status: status,
+        statusCode: statusMap[status],
+        updatedAt: Timestamp.now(),
+        // Jika status jadi 'Selesai', catat waktunya (finishedAt).
+        // Jika status dikembalikan ke 'Proses'/'Tunda', reset finishedAt jadi null.
+        finishedAt: status === "Selesai" ? Timestamp.now() : null
     };
 
-    // Jika ada Attachment (Text / File) saat ganti status
     let newAttachment = null;
     if (text || fileId) {
-      newAttachment = await prepareAttachment(
-        idCompany,
-        text,
-        fileId,
-        req.user
-      );
-      if (newAttachment) {
-        updateData.attachments = FieldValue.arrayUnion(newAttachment);
-      }
+        newAttachment = await prepareAttachment(idCompany, text, fileId, req.user);
+        if (newAttachment) {
+            updateData.attachments = FieldValue.arrayUnion(newAttachment);
+        }
     }
 
     await taskRef.update(updateData);
 
-    // LOG AKTIVITAS
     await logCompanyActivity(idCompany, {
-      actorEmail: email,
-      actorName: nama || "User",
-      target: taskId,
-      action: "UPDATE_STATUS_TASK",
-      description: `Mengubah status dari ${currentStatus} ke ${status}.`,
+        actorEmail: email,
+        actorName: nama || "User",
+        target: taskId,
+        action: "UPDATE_STATUS_TASK",
+        description: `Mengubah status dari ${currentStatus} ke ${status}.`,
     });
 
     return res.status(200).json({
-      message: `Status berhasil diubah ke ${status}.`,
-      data: {
-        taskId,
-        status,
-        statusCode: statusMap[status],
-        addedAttachment: newAttachment,
-      },
+        message: `Status berhasil diubah ke ${status}.`,
+        data: {
+            taskId,
+            status,
+            statusCode: statusMap[status],
+            // Return finishedAt agar FE bisa update UI
+            finishedAt: updateData.finishedAt ? updateData.finishedAt.toDate().toISOString() : null,
+            addedAttachment: newAttachment
+        }
     });
+
   } catch (error) {
     console.error("Error Update Status:", error);
-    return res
-      .status(500)
-      .json({ message: "Server Error", error: error.message });
+    return res.status(500).json({ message: "Server Error", error: error.message });
   }
 });
 
