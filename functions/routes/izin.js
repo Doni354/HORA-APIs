@@ -180,10 +180,12 @@ router.put("/:leaveId/status", verifyToken, async (req, res) => {
         .json({ message: "Hanya Admin yang dapat memproses izin." });
     }
 
-    if (!["approved", "rejected"].includes(status)) {
+    if (!["approved", "rejected", "pending"].includes(status)) {
       return res
         .status(400)
-        .json({ message: "Status harus 'approved' atau 'rejected'." });
+        .json({
+          message: "Status harus 'approved' atau 'rejected' atau 'pending'.",
+        });
     }
 
     const leaveRef = db
@@ -198,12 +200,6 @@ router.put("/:leaveId/status", verifyToken, async (req, res) => {
     }
 
     const currentData = leaveDoc.data();
-
-    if (currentData.status !== "pending") {
-      return res
-        .status(400)
-        .json({ message: "Izin ini sudah diproses sebelumnya." });
-    }
 
     const updatePayload = {
       status: status,
