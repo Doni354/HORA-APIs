@@ -1,15 +1,34 @@
 /* eslint-disable */
 const express = require("express")
-const Busboy = require("busboy")
-const path = require("path")
 const { Timestamp } = require("firebase-admin/firestore")
-
-const { db, bucket } = require("../config/firebase")
+const { db } = require("../config/firebase")
 
 const router = express.Router()
 
 // ---------------------------------------------------------
-// GET /absensi/HomeA - View Absensi Data
+// HELPER: Get File URL by ID
+// ---------------------------------------------------------
+const getFileUrlById = async (idPerusahaan, idBerkas) => {
+  if (!idPerusahaan || !idBerkas) return null;
+
+  try {
+    const fileDoc = await db
+      .collection("companies")
+      .doc(idPerusahaan)
+      .collection("files")
+      .doc(idBerkas)
+      .get();
+
+    if (!fileDoc.exists) return null;
+    return fileDoc.data().downloadUrl;
+  } catch (error) {
+    console.error("Error fetching file:", error);
+    return null;
+  }
+};
+
+// ---------------------------------------------------------
+// GET /absensi/HomeA - View Absensi Data (Per Company)
 // ---------------------------------------------------------
 router.get("/HomeA", async (req, res) => {
   try {
@@ -28,10 +47,11 @@ router.get("/HomeA", async (req, res) => {
     const startDate = new Date(tglstart)
     const endDate = new Date(tglend)
 
-    // Query absensi records within the date range
+    // PERUBAHAN: Query ke Sub-Collection companies/{id}/absensi
     const snapshot = await db
+      .collection("companies")
+      .doc(idPerusahaan)
       .collection("absensi")
-      .where("idPerusahaan", "==", idPerusahaan)
       .where("tanggal", ">=", startDate)
       .where("tanggal", "<=", endDate)
       .get()
@@ -49,13 +69,12 @@ router.get("/HomeA", async (req, res) => {
         tanggal: data.tanggal,
         waktuCheckIn: data.waktuCheckIn,
         waktuCheckOut: data.waktuCheckOut || null,
-        bluetoothID: data.bluetoothID || null,
         AlamatLongtitude: data.alamatLongtitude,
         AlamatLatitude: data.alamatLatitude,
         AlamatLoc: data.alamatLoc,
         telat: data.telat || null,
         Foto: data.fotoCheckIn || null,
-        IDPerusahaan: data.idPerusahaan,
+        IDPerusahaan: data.idPerusahaan, // Tetap disimpan di doc utk referensi
         NamaPerusahaan: data.namaPerusahaan,
         FotoCheckOut: data.fotoCheckOut || null,
         LatitudeCheckOut: data.latitudeCheckOut || null,
@@ -82,11 +101,16 @@ router.get("/HomeA", async (req, res) => {
 router.get("/indie", async (req, res) => {
   try {
     const idkaryawan = req.query.idkaryawan
+    // PERUBAHAN: Wajib ada idPerusahaan karena skrg sub-collection
+    const idPerusahaan = req.query.idPerusahaan || req.query.idperusahaan 
     const tglstart = req.query.tglstart
     const tglend = req.query.tglend
 
     if (!idkaryawan) {
       return res.status(400).json({ message: "idkaryawan wajib diisi" })
+    }
+    if (!idPerusahaan) {
+      return res.status(400).json({ message: "idPerusahaan wajib diisi untuk mencari data" })
     }
 
     if (!tglstart || !tglend) {
@@ -95,14 +119,11 @@ router.get("/indie", async (req, res) => {
 
     const startDate = new Date(tglstart)
     const endDate = new Date(tglend)
-    // Set endDate to end of the day to ensure full coverage if needed, 
-    // or keep strictly as provided if time component is included in input.
-    // Assuming standard date string "YYYY-MM-DD" which defaults to 00:00:00.
-    // Ideally, endDate should probably cover the full day.
-    // endDate.setHours(23, 59, 59, 999); 
 
-    // Query absensi records for specific employee
+    // PERUBAHAN: Query ke Sub-Collection
     const snapshot = await db
+      .collection("companies")
+      .doc(idPerusahaan)
       .collection("absensi")
       .where("idKaryawan", "==", idkaryawan)
       .where("tanggal", ">=", startDate)
@@ -115,21 +136,19 @@ router.get("/indie", async (req, res) => {
 
     const absensiData = snapshot.docs.map((doc) => {
       const data = doc.data()
-      // Mapping response to match the requested format
       return {
         idKaryawan: data.idKaryawan,
         namaKaryawan: data.namaKaryawan,
-        tanggal: data.tanggal, // Firestore Timestamp or Date
+        tanggal: data.tanggal,
         waktuCheckIn: data.waktuCheckIn,
         waktuCheckOut: data.waktuCheckOut || null,
-        bluetoothID: data.bluetoothID || null,
         alamatLongtitude: data.alamatLongtitude,
         alamatLatitude: data.alamatLatitude,
         alamatLoc: data.alamatLoc,
         telat: data.telat || null,
         id: doc.id,
-        foto: null, // Placeholder based on example request
-        fotoKaryawan: data.fotoCheckIn || null, // Mapping CheckIn photo to fotoKaryawan
+        foto: null,
+        fotoKaryawan: data.fotoCheckIn || null,
         idPerusahaan: data.idPerusahaan,
         namaperusahaan: data.namaPerusahaan,
         tanggalAbsensi: data.tanggal,
@@ -152,268 +171,198 @@ router.get("/indie", async (req, res) => {
 })
 
 // ---------------------------------------------------------
-// POST /absensi - Check In Absensi (Auto Shift Detection)
+// POST /absensi - Check In Absensi (Sub-Collection)
 // ---------------------------------------------------------
-router.post("/", (req, res) => {
-  const busboy = Busboy({ headers: req.headers });
+router.post("/", async (req, res) => {
+  try {
+    const {
+      IDKaryawan,
+      NamaKaryawan,
+      AlamatLongtitude,
+      AlamatLatitude,
+      AlamatLoc,
+      IDPerusahaan,
+      NamaPerusahaan,
+      zone = "Asia/Jakarta",
+      idBerkasFoto 
+    } = req.body;
 
-  const fields = {};
-  let fileBuffer = null;
-  let fileMime = null;
-  let fileName = null;
+    // 1. Validasi Input
+    if (!IDKaryawan) return res.status(400).json({ message: "IDKaryawan wajib diisi" });
+    if (!NamaKaryawan) return res.status(400).json({ message: "NamaKaryawan wajib diisi" });
+    if (!AlamatLongtitude) return res.status(400).json({ message: "AlamatLongtitude wajib diisi" });
+    if (!AlamatLatitude) return res.status(400).json({ message: "AlamatLatitude wajib diisi" });
+    if (!IDPerusahaan) return res.status(400).json({ message: "IDPerusahaan wajib diisi" });
+    if (!NamaPerusahaan) return res.status(400).json({ message: "NamaPerusahaan wajib diisi" });
+    if (!idBerkasFoto) return res.status(400).json({ message: "idBerkasFoto wajib diisi (Upload foto terlebih dahulu)" });
 
-  busboy.on("field", (fieldname, val) => {
-    fields[fieldname] = val;
-  });
+    // 2. Ambil URL Foto
+    const photoURL = await getFileUrlById(IDPerusahaan, idBerkasFoto);
+    if (!photoURL) {
+      return res.status(404).json({ message: "File foto tidak ditemukan di database perusahaan." });
+    }
 
-  busboy.on("file", (fieldname, file, info) => {
-    if (fieldname === "Foto") {
-      const { mimeType, filename } = info;
-      fileMime = mimeType;
-      fileName = filename;
-      const chunks = [];
+    // 3. Logic Shift
+    const now = new Date();
+    const currentHour = parseInt(
+      now.toLocaleString("en-US", {
+        timeZone: "Asia/Jakarta",
+        hour: "numeric",
+        hour12: false,
+      })
+    );
 
-      file.on("data", (data) => chunks.push(data));
-      file.on("end", () => {
-        fileBuffer = Buffer.concat(chunks);
-      });
+    let detectedShift = "";
+    if (currentHour >= 7 && currentHour < 15) {
+      detectedShift = "Pagi";
+    } else if (currentHour >= 15 && currentHour < 23) {
+      detectedShift = "Siang";
     } else {
-      file.resume();
+      detectedShift = "Malam";
     }
-  });
 
-  busboy.on("error", (err) => {
-    console.error("Busboy Error:", err);
-    return res.status(500).json({ message: "Gagal mengurai form data", error: err.message });
-  });
+    // 4. Cek Double Check-in (Sub-Collection)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
 
-  busboy.on("finish", async () => {
-    try {
-      const idKaryawan = fields.IDKaryawan;
-      const namaKaryawan = fields.NamaKaryawan;
-      const alamatLongtitude = fields.AlamatLongtitude;
-      const alamatLatitude = fields.AlamatLatitude;
-      const alamatLoc = fields.AlamatLoc || "";
-      const idPerusahaan = fields.IDPerusahaan;
-      const namaPerusahaan = fields.NamaPerusahaan;
-      const zone = fields.zone || "Asia/Jakarta";
+    // PERUBAHAN: Cek di Sub-Collection
+    const existingCheckIn = await db
+      .collection("companies")
+      .doc(IDPerusahaan)
+      .collection("absensi")
+      .where("idKaryawan", "==", IDKaryawan)
+      .where("tanggal", ">=", today)
+      .where("tanggal", "<", tomorrow)
+      .limit(1)
+      .get();
 
-      // 1. Validasi required fields (Shift dihapus dari sini karena auto)
-      if (!idKaryawan) return res.status(400).json({ message: "IDKaryawan wajib diisi" });
-      if (!namaKaryawan) return res.status(400).json({ message: "NamaKaryawan wajib diisi" });
-      if (!alamatLongtitude) return res.status(400).json({ message: "AlamatLongtitude wajib diisi" });
-      if (!alamatLatitude) return res.status(400).json({ message: "AlamatLatitude wajib diisi" });
-      if (!idPerusahaan) return res.status(400).json({ message: "IDPerusahaan wajib diisi" });
-      if (!namaPerusahaan) return res.status(400).json({ message: "NamaPerusahaan wajib diisi" });
-      if (!fileBuffer) return res.status(400).json({ message: "Photo is empty" });
-
-      // ----------------------------------------------------------
-      // 2. LOGIKA PENENTUAN SHIFT OTOMATIS
-      // ----------------------------------------------------------
-      const now = new Date();
-      // Paksa ambil jam dalam format WIB (Asia/Jakarta) integer 0-23
-      const currentHour = parseInt(
-        now.toLocaleString("en-US", {
-          timeZone: "Asia/Jakarta",
-          hour: "numeric",
-          hour12: false,
-        })
-      );
-
-      let detectedShift = "";
-
-      // Logika:
-      // Pagi  = 07:00 s/d 14:59 (Jam 7 sampai < 15)
-      // Siang = 15:00 s/d 22:59 (Jam 15 sampai < 23)
-      // Malam = 23:00 s/d 06:59 (Sisanya)
-
-      if (currentHour >= 7 && currentHour < 15) {
-        detectedShift = "Pagi";
-      } else if (currentHour >= 15 && currentHour < 23) {
-        detectedShift = "Siang";
-      } else {
-        // Ini akan menangkap jam 23, 00, 01, 02, 03, 04, 05, 06
-        detectedShift = "Malam";
-      }
-      // ----------------------------------------------------------
-
-      // 3. Cek apakah sudah absen hari ini
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-
-      const existingCheckIn = await db
-        .collection("absensi")
-        .where("idKaryawan", "==", idKaryawan)
-        .where("idPerusahaan", "==", idPerusahaan)
-        .where("tanggal", ">=", today)
-        .where("tanggal", "<", tomorrow)
-        .limit(1)
-        .get();
-
-      if (!existingCheckIn.empty) {
-        return res.status(400).json({ message: "Sudah check in hari ini" });
-      }
-
-      // Upload photo
-      const timestamp = Date.now();
-      const ext = path.extname(fileName || "").toLowerCase() || ".jpg";
-      const photoPath = `absensi/checkin/${idPerusahaan}/${idKaryawan}_${timestamp}${ext}`;
-
-      const photoStorage = bucket.file(photoPath);
-      await photoStorage.save(fileBuffer, {
-        metadata: { contentType: fileMime || "image/jpeg" },
-        public: true,
-      });
-      const photoURL = photoStorage.publicUrl();
-
-      // Save to Firestore
-      const absensiData = {
-        idKaryawan,
-        namaKaryawan,
-        alamatLongtitude,
-        alamatLatitude,
-        alamatLoc,
-        idPerusahaan,
-        namaPerusahaan,
-        shift: detectedShift, // Simpan shift yang sudah dihitung otomatis
-        tanggal: Timestamp.now(),
-        waktuCheckIn: Timestamp.now(),
-        waktuCheckOut: null,
-        fotoCheckIn: photoURL,
-        fotoCheckOut: null,
-        latitudeCheckOut: null,
-        longtitudeCheckOut: null,
-        durasi: null,
-        alamatLocCheckOut: null,
-        zone,
-        status: "checked-in",
-        createdAt: Timestamp.now(),
-      };
-
-      const docRef = await db.collection("absensi").add(absensiData);
-
-      return res.status(200).json({
-        message: `Absensi Berhasil (Shift ${detectedShift})`,
-        id: docRef.id,
-        fotoURL: photoURL,
-        shift: detectedShift // Mengembalikan info shift ke FE
-      });
-    } catch (err) {
-      console.error("Check in error:", err);
-      return res.status(500).json({ message: "Gagal menyimpan absensi", error: err.message });
+    if (!existingCheckIn.empty) {
+      return res.status(400).json({ message: "Sudah check in hari ini" });
     }
-  });
 
-  busboy.end(req.rawBody);
+    // 5. Save to Firestore (Sub-Collection)
+    const absensiData = {
+      idKaryawan: IDKaryawan,
+      namaKaryawan: NamaKaryawan,
+      alamatLongtitude: AlamatLongtitude,
+      alamatLatitude: AlamatLatitude,
+      alamatLoc: AlamatLoc || "",
+      idPerusahaan: IDPerusahaan,
+      namaPerusahaan: NamaPerusahaan,
+      shift: detectedShift,
+      tanggal: Timestamp.now(),
+      waktuCheckIn: Timestamp.now(),
+      waktuCheckOut: null,
+      fotoCheckIn: photoURL, 
+      fotoCheckOut: null,
+      latitudeCheckOut: null,
+      longtitudeCheckOut: null,
+      durasi: null,
+      alamatLocCheckOut: null,
+      zone,
+      status: "checked-in",
+      createdAt: Timestamp.now(),
+    };
+
+    // PERUBAHAN: Simpan ke Sub-Collection
+    const docRef = await db
+      .collection("companies")
+      .doc(IDPerusahaan)
+      .collection("absensi")
+      .add(absensiData);
+
+    return res.status(200).json({
+      message: `Absensi Berhasil (Shift ${detectedShift})`,
+      id: docRef.id,
+      fotoURL: photoURL,
+      shift: detectedShift
+    });
+
+  } catch (err) {
+    console.error("Check in error:", err);
+    return res.status(500).json({ message: "Gagal menyimpan absensi", error: err.message });
+  }
 });
-// ---------------------------------------------------------
-// PUT /absensi/pulang - Check Out Absensi
-// ---------------------------------------------------------
-router.put("/pulang", (req, res) => {
-  const authHeader = req.headers.authorization || ""
 
+// ---------------------------------------------------------
+// PUT /absensi/pulang - Check Out Absensi (Sub-Collection)
+// ---------------------------------------------------------
+router.put("/pulang", async (req, res) => {
+  const authHeader = req.headers.authorization || "";
   if (!authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ message: "Unauthorized" })
+    return res.status(401).json({ message: "Unauthorized" });
   }
 
-  const busboy = Busboy({ headers: req.headers })
+  try {
+    const id = req.query.id; // ID Dokumen Absensi
+    
+    const {
+      LatitudePulang,
+      LongtitudePulang,
+      AlamatPulang,
+      NamaKaryawan, 
+      zone = "Asia/Jakarta",
+      idBerkasFoto,
+      IDPerusahaan // <--- PERUBAHAN: Wajib kirim ID Perusahaan di Body
+    } = req.body;
 
-  const fields = {}
-  let fileBuffer = null
-  let fileMime = null
-  let fileName = null
+    // Validasi
+    if (!id) return res.status(400).json({ message: "Query id wajib diisi" });
+    if (!LatitudePulang) return res.status(400).json({ message: "LatitudePulang wajib diisi" });
+    if (!LongtitudePulang) return res.status(400).json({ message: "LongtitudePulang wajib diisi" });
+    if (!AlamatPulang) return res.status(400).json({ message: "AlamatPulang wajib diisi" });
+    if (!idBerkasFoto) return res.status(400).json({ message: "idBerkasFoto wajib diisi" });
+    
+    // Validasi ID Perusahaan sangat penting untuk menemukan path dokumen
+    if (!IDPerusahaan) return res.status(400).json({ message: "IDPerusahaan wajib diisi di body untuk verifikasi lokasi data" });
 
-  busboy.on("field", (fieldname, val) => {
-    fields[fieldname] = val
-  })
+    // 1. Get existing absensi record (Sub-Collection Path)
+    const docRef = db
+      .collection("companies")
+      .doc(IDPerusahaan)
+      .collection("absensi")
+      .doc(id);
+      
+    const docSnap = await docRef.get();
 
-  busboy.on("file", (fieldname, file, info) => {
-    if (fieldname === "Foto") {
-      const { mimeType, filename } = info
-      fileMime = mimeType
-      fileName = filename
-      const chunks = []
-
-      file.on("data", (data) => chunks.push(data))
-      file.on("end", () => {
-        fileBuffer = Buffer.concat(chunks)
-      })
-    } else {
-      file.resume()
+    if (!docSnap.exists) {
+      return res.status(404).json({ message: "Absensi record not found di perusahaan ini" });
     }
-  })
 
-  busboy.on("error", (err) => {
-    console.error("Busboy Error:", err)
-    return res.status(500).json({ message: "Gagal mengurai form data", error: err.message })
-  })
+    const absensiData = docSnap.data();
 
-  busboy.on("finish", async () => {
-    try {
-      const tanggal = req.query.tanggal
-      const id = req.query.id
-      const latitudePulang = fields.LatitudePulang
-      const longtitudePulang = fields.LongtitudePulang
-      const alamatPulang = fields.AlamatPulang
-      const namaKaryawan = fields.NamaKaryawan
-      const zone = fields.zone || "Asia/Jakarta"
-
-      // Validasi required fields
-      if (!tanggal) return res.status(400).json({ message: "tanggal wajib diisi" })
-      if (!id) return res.status(400).json({ message: "id wajib diisi" })
-      if (!latitudePulang) return res.status(400).json({ message: "LatitudePulang wajib diisi" })
-      if (!longtitudePulang) return res.status(400).json({ message: "LongtitudePulang wajib diisi" })
-      if (!alamatPulang) return res.status(400).json({ message: "AlamatPulang wajib diisi" })
-      if (!fileBuffer) return res.status(400).json({ message: "Photo is empty" })
-
-      // Get existing absensi record
-      const docRef = db.collection("absensi").doc(id)
-      const docSnap = await docRef.get()
-
-      if (!docSnap.exists) {
-        return res.status(404).json({ message: "Absensi record not found" })
-      }
-
-      // Upload checkout photo
-      const timestamp = Date.now()
-      const ext = path.extname(fileName || "").toLowerCase() || ".jpg"
-      const photoPath = `absensi/checkout/${docSnap.data().idPerusahaan}/${docSnap.data().idKaryawan}_${timestamp}${ext}`
-
-      const photoStorage = bucket.file(photoPath)
-      await photoStorage.save(fileBuffer, {
-        metadata: { contentType: fileMime || "image/jpeg" },
-        public: true,
-      })
-      const photoURL = photoStorage.publicUrl()
-
-      // Calculate duration from check-in to check-out
-      const checkInTime = docSnap.data().waktuCheckIn.toDate()
-      const checkOutTime = new Date()
-      const durationMs = checkOutTime - checkInTime
-      const durationHours = (durationMs / (1000 * 60 * 60)).toFixed(2)
-
-      // Update absensi record
-      await docRef.update({
-        waktuCheckOut: Timestamp.now(),
-        fotoCheckOut: photoURL,
-        latitudeCheckOut: latitudePulang,
-        longtitudeCheckOut: longtitudePulang,
-        alamatLocCheckOut: alamatPulang,
-        durasi: durationHours,
-        status: "checked-out",
-        updatedAt: Timestamp.now(),
-      })
-
-      return res.status(200).send("updated")
-    } catch (err) {
-      console.error("Check out error:", err)
-      return res.status(500).json({ message: "Gagal mengupdate absensi", error: err.message })
+    // 2. Ambil URL Foto Pulang
+    const photoURL = await getFileUrlById(IDPerusahaan, idBerkasFoto);
+    if (!photoURL) {
+      return res.status(404).json({ message: "File foto pulang tidak ditemukan di database perusahaan." });
     }
-  })
 
-  busboy.end(req.rawBody)
-})
+    // 3. Calculate duration
+    const checkInTime = absensiData.waktuCheckIn.toDate();
+    const checkOutTime = new Date();
+    const durationMs = checkOutTime - checkInTime;
+    const durationHours = (durationMs / (1000 * 60 * 60)).toFixed(2);
 
-module.exports = router
+    // 4. Update absensi record
+    await docRef.update({
+      waktuCheckOut: Timestamp.now(),
+      fotoCheckOut: photoURL,
+      latitudeCheckOut: LatitudePulang,
+      longtitudeCheckOut: LongtitudePulang,
+      alamatLocCheckOut: AlamatPulang,
+      durasi: durationHours,
+      status: "checked-out",
+      updatedAt: Timestamp.now(),
+    });
+
+    return res.status(200).send("updated");
+
+  } catch (err) {
+    console.error("Check out error:", err);
+    return res.status(500).json({ message: "Gagal mengupdate absensi", error: err.message });
+  }
+});
+
+module.exports = router;
