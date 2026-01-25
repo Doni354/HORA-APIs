@@ -2,7 +2,8 @@
 const Busboy = require("busboy");
 const path = require("path");
 const { bucket } = require("../config/firebase");
-
+const { PutObjectCommand } = require("@aws-sdk/client-s3");
+const { r2 } = require("../config/r2");
 // Helper sederhana untuk format size
 const formatFileSize = (bytes) => {
   if (bytes === 0) return "0 B";
@@ -67,7 +68,7 @@ const uploadFile = (req, folderName, fileNameFunc) => {
 };
 
 // ---------------------------------------------------------
-// HELPER: Upload File Berkas (Returns Detail Metadata)
+// HELPER: Upload File Berkas to Cloudflare R2
 // ---------------------------------------------------------
 const uploadFileBerkas = (req, folderName) => {
   return new Promise((resolve, reject) => {
@@ -87,39 +88,37 @@ const uploadFileBerkas = (req, folderName) => {
     });
 
     busboy.on("finish", async () => {
-      if (!fileBuffer)
+      if (!fileBuffer) {
         return reject(new Error("Tidak ada file yang diupload."));
+      }
 
       try {
-        // 1. Generate Nama File Unik
         const safeFileName = fileInfo.filename.replace(/[^a-zA-Z0-9.-]/g, "_");
-        const storagePath = `${folderName}/${Date.now()}_${safeFileName}`;
+        const objectKey = `${folderName}/${Date.now()}_${safeFileName}`;
 
-        const fileRef = bucket.file(storagePath);
+        await r2.send(
+          new PutObjectCommand({
+            Bucket: BUCKET_NAME,
+            Key: objectKey,
+            Body: fileBuffer,
+            ContentType: fileInfo.mimeType,
+          })
+        );
 
-        // 2. Upload ke GCS
-        await fileRef.save(fileBuffer, {
-          metadata: { contentType: fileInfo.mimeType },
-          public: true,
-        });
+        const publicUrl = `https://609723b5d7cc16b02d6454eebea06c5a.r2.cloudflarestorage.com/${BUCKET_NAME}/${objectKey}`;
 
-        const publicUrl = `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
-
-        // 3. Hitung Ukuran Dinamis (IMPROVED)
         const sizeBytes = fileBuffer.length;
-        const sizeDisplay = formatFileSize(sizeBytes); // Pakai helper di atas
 
-        // Return Object Lengkap
         resolve({
           publicUrl,
-          storagePath,
+          storagePath: objectKey,
           originalName: fileInfo.filename,
           mimeType: fileInfo.mimeType,
-          sizeDisplay: sizeDisplay, // Contoh: "500 B", "12 KB", "1.5 MB"
-          sizeBytes: sizeBytes,
+          sizeDisplay: formatFileSize(sizeBytes),
+          sizeBytes,
         });
-      } catch (e) {
-        reject(e);
+      } catch (err) {
+        reject(err);
       }
     });
 
