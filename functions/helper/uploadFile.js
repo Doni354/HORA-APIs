@@ -20,7 +20,36 @@ const formatFileSize = (bytes) => {
 
   return `${value} ${sizes[i]}`;
 };
+// ---------------------------------------------------------
+// HELPER: Convert "1.17 MB" string back to bytes number
+// ---------------------------------------------------------
+const parseSizeStringToBytes = (sizeString) => {
+  if (!sizeString) return 0;
+  
+  // Kalau ternyata di database kesimpannya angka, langsung return
+  if (typeof sizeString === 'number') return sizeString;
 
+  const parts = sizeString.split(' '); // Pisahkan "1.17" dan "MB"
+  
+  // Kalau formatnya aneh (gak ada spasi atau array < 2), anggap 0
+  if (parts.length < 2) {
+      // Coba parse langsung siapa tau isinya string angka "12345"
+      return Number(sizeString) || 0; 
+  }
+
+  const value = parseFloat(parts[0]);
+  const unit = parts[1].toUpperCase(); // Pastikan huruf besar (MB, KB)
+
+  const k = 1024;
+  
+  switch (unit) {
+    case 'KB': return value * k;
+    case 'MB': return value * Math.pow(k, 2);
+    case 'GB': return value * Math.pow(k, 3);
+    case 'TB': return value * Math.pow(k, 4);
+    default: return value; // Asumsi Bytes (B)
+  }
+};
 const uploadFile = (req, folderName, fileNameFunc) => {
   return new Promise((resolve, reject) => {
     const busboy = Busboy({ headers: req.headers });
@@ -71,7 +100,7 @@ const uploadFile = (req, folderName, fileNameFunc) => {
 // ---------------------------------------------------------
 // HELPER: Upload File Berkas (Returns Detail Metadata)
 // ---------------------------------------------------------
-const uploadFileBerkasFirebaseStorage = (req, folderName) => {
+const uploadFileBerkas = (req, folderName) => {
   return new Promise((resolve, reject) => {
     const busboy = Busboy({ headers: req.headers });
     let fileBuffer = null;
@@ -136,7 +165,7 @@ const uploadFileBerkasFirebaseStorage = (req, folderName) => {
 // ---------------------------------------------------------
 // HELPER: Upload File Berkas to Cloudflare R2
 // ---------------------------------------------------------
-const uploadFileBerkas = (req, folderName) => {
+const uploadFileBerkasR2 = (req, folderName) => {
   return new Promise((resolve, reject) => {
     const busboy = Busboy({ headers: req.headers });
     let fileBuffer = null;
@@ -196,4 +225,4 @@ const uploadFileBerkas = (req, folderName) => {
   });
 };
 
-module.exports = { uploadFile, uploadFileBerkas };
+module.exports = { uploadFile, uploadFileBerkas, formatFileSize, parseSizeStringToBytes };

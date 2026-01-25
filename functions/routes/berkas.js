@@ -7,7 +7,11 @@ const { logCompanyActivity } = require("../helper/logCompanyActivity");
 const Busboy = require("busboy");
 const path = require("path");
 const { Timestamp } = require("firebase-admin/firestore");
-const { uploadFileBerkas } = require("../helper/uploadFile");
+const {
+  uploadFileBerkas,
+  formatFileSize,
+  parseSizeStringToBytes,
+} = require("../helper/uploadFile");
 
 // ---------------------------------------------------------
 // POST /upload - Upload File dengan Kategori
@@ -17,7 +21,7 @@ router.post("/upload", verifyToken, async (req, res) => {
   try {
     const user = req.user;
     // Ambil category dari Query Param, default ke "general" jika kosong
-    const category = req.query.category || "general"; 
+    const category = req.query.category || "general";
 
     // 1. Validasi Akses
     if (!["admin", "staff"].includes(user.role)) {
@@ -42,14 +46,14 @@ router.post("/upload", verifyToken, async (req, res) => {
       mimeType: result.mimeType,
       size: result.sizeDisplay,
       sizeBytes: result.sizeBytes,
-      
+
       // Metadata category
-      category: category, 
-      
+      category: category,
+
       uploadedBy: user.email,
       uploaderName: user.nama || "User",
       uploaderRole: user.role,
-      
+
       createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
     };
@@ -89,12 +93,13 @@ router.post("/upload", verifyToken, async (req, res) => {
 // ---------------------------------------------------------
 // GET /list - List Files (Filter by Category)
 // ---------------------------------------------------------
-// URL: {{BaseUrl}}/api/files/list?category=reimburse
-// URL: {{BaseUrl}}/api/files/list (Default: General + Null)
+// URL: {{BaseUrl}}/api/files/list?category=ALL        <-- AMBIL SEMUA
+// URL: {{BaseUrl}}/api/files/list?category=reimburse  <-- KATEGORI KHUSUS
+// URL: {{BaseUrl}}/api/files/list                     <-- DEFAULT (General + Null)
 router.get("/list", verifyToken, async (req, res) => {
   try {
     const user = req.user;
-    const categoryFilter = req.query.category; // Bisa string atau undefined
+    const categoryFilter = req.query.category; // Bisa 'ALL', string lain, atau undefined
 
     if (!user.idCompany) {
       return res.status(400).json({ message: "ID Company tidak valid." });
@@ -106,12 +111,13 @@ router.get("/list", verifyToken, async (req, res) => {
       .collection("files")
       .orderBy("createdAt", "desc");
 
-    // OPTIMASI: Jika user minta kategori spesifik, kita filter langsung di query
-    if (categoryFilter) {
+    // OPTIMASI QUERY:
+    // 1. Jika 'ALL', jangan pakai .where(), biarkan ambil semua.
+    // 2. Jika kosong (undefined), jangan pakai .where() dulu (filter manual nanti).
+    // 3. Jika ada isi DAN bukan 'ALL', baru filter di database.
+    if (categoryFilter && categoryFilter !== "ALL") {
       query = query.where("category", "==", categoryFilter);
     }
-    // JIKA KOSONG: Kita ambil semua dulu (karena query OR null+general susah di Firestore bareng orderBy)
-    // Lalu kita filter di bawah.
 
     const snapshot = await query.get();
 
@@ -123,15 +129,13 @@ router.get("/list", verifyToken, async (req, res) => {
     snapshot.forEach((doc) => {
       const data = doc.data();
 
-      // LOGIKA FILTER MANUAL (Untuk kasus Default/Kosong)
-      // Jika categoryFilter TIDAK ADA, kita hanya mau mengambil:
-      // 1. Data yang category-nya "general"
-      // 2. Data yang category-nya NULL/Undefined (legacy data)
-      if (!categoryFilter) {
-        // Jika data punya kategori DAN kategorinya bukan general, SKIP.
-        // (Berarti ini file reimburse/tugas dsb yang tidak boleh muncul di list general)
+      // LOGIKA FILTER MANUAL
+      // Kita hanya filter manual jika user TIDAK minta 'ALL' DAN TIDAK minta kategori spesifik.
+      // Artinya, jika categoryFilter kosong, jalankan logika Default Group.
+      if (!categoryFilter && categoryFilter !== "ALL") {
+        // Logika Default: Hanya General atau Null/Undefined
         if (data.category && data.category !== "general") {
-          return; 
+          return; // Skip kategori lain (reimburse, dll)
         }
       }
 
@@ -141,7 +145,7 @@ router.get("/list", verifyToken, async (req, res) => {
         downloadUrl: data.downloadUrl,
         mimeType: data.mimeType,
         size: data.size,
-        category: data.category || "general", // Default tampilkan general jika null
+        category: data.category || "general",
         uploaderName: data.uploaderName,
         createdAt: data.createdAt ? data.createdAt.toDate() : null,
       });
@@ -153,6 +157,77 @@ router.get("/list", verifyToken, async (req, res) => {
     });
   } catch (e) {
     console.error("Get Files Error:", e);
+    return res.status(500).json({ message: "Server Error" });
+  }
+});
+
+// ---------------------------------------------------------
+// GET /total-size - Get Total Size (Default: General + Null + Undefined)
+// ---------------------------------------------------------
+router.get("/total-size", verifyToken, async (req, res) => {
+  try {
+    const user = req.user;
+    const categoryFilter = req.query.category; // Bisa 'ALL', string lain, atau undefined
+
+    if (!user.idCompany) {
+      return res.status(400).json({ message: "ID Company tidak valid." });
+    }
+
+    let query = db
+      .collection("companies")
+      .doc(user.idCompany)
+      .collection("files");
+
+    // Optimasi select fields
+    query = query.select("size", "category");
+
+    // LOGIKA QUERY DATABASE:
+    // Hanya pasang .where jika ada kategori spesifik DAN bukan 'ALL'
+    if (categoryFilter && categoryFilter !== "ALL") {
+      query = query.where("category", "==", categoryFilter);
+    }
+
+    const snapshot = await query.get();
+
+    let totalBytes = 0;
+    let fileCount = 0;
+
+    if (snapshot.empty) {
+      return res.status(200).json({
+        message: "Total size berhasil dihitung.",
+        totalSize: "0 B",
+        totalBytes: 0,
+        fileCount: 0,
+      });
+    }
+
+    snapshot.forEach((doc) => {
+      const data = doc.data();
+
+      // LOGIKA FILTER MANUAL (STRICT)
+      // Jalankan hanya jika user TIDAK minta 'ALL' DAN categoryFilter kosong (mode default)
+      if (!categoryFilter && categoryFilter !== "ALL") {
+        const isDefaultGroup = !data.category || data.category === "general";
+
+        // Jika bukan bagian dari default group, skip
+        if (!isDefaultGroup) return;
+      }
+
+      // Parse string "1.17 MB" ke bytes angka
+      const sizeInBytes = parseSizeStringToBytes(data.size);
+
+      totalBytes += sizeInBytes;
+      fileCount++;
+    });
+
+    return res.status(200).json({
+      message: "Total size berhasil dihitung.",
+      totalSize: formatFileSize(totalBytes),
+      totalBytes: totalBytes,
+      fileCount: fileCount,
+    });
+  } catch (e) {
+    console.error("Get Total Size Error:", e);
     return res.status(500).json({ message: "Server Error" });
   }
 });
