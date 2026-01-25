@@ -4,6 +4,7 @@ const path = require("path");
 const { bucket } = require("../config/firebase");
 const { PutObjectCommand } = require("@aws-sdk/client-s3");
 const { r2 } = require("../config/r2");
+const BUCKET_NAME = "vorce";
 // Helper sederhana untuk format size
 const formatFileSize = (bytes) => {
   if (bytes === 0) return "0 B";
