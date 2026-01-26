@@ -289,4 +289,71 @@ router.post("/update-status", verifyToken, async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------
+// DELETE /delete/:id - Hapus Reimburse
+// ---------------------------------------------------------
+router.delete("/delete/:id", verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { idCompany, role, email, nama } = req.user;
+
+    const docRef = db
+      .collection("companies")
+      .doc(idCompany)
+      .collection("reimbursements")
+      .doc(id);
+
+    const docSnapshot = await docRef.get();
+
+    // 1. Cek apakah data ada
+    if (!docSnapshot.exists) {
+      return res
+        .status(404)
+        .json({ message: "Data reimburse tidak ditemukan." });
+    }
+
+    const data = docSnapshot.data();
+
+    // 2. Validasi Hak Akses (Authorization)
+    // Staff hanya boleh hapus milik sendiri
+    if (role !== "admin" && data.requestByEmail !== email) {
+      return res.status(403).json({
+        message: "Akses ditolak. Anda tidak berhak menghapus data ini.",
+      });
+    }
+
+    // 3. Validasi Status (CORE LOGIC)
+    // Jika LUNAS (code: 1) -> GABOLEH dihapus
+    if (data.statusCode === REIMBURSE_STATUS.LUNAS.code) {
+      return res.status(400).json({
+        message:
+          "Gagal hapus. Data yang sudah LUNAS tidak boleh dihapus demi arsip keuangan.",
+      });
+    }
+
+    // Status TUNGGAKAN (0) atau DITOLAK (2) -> LANJUT HAPUS
+
+    // 4. Eksekusi Hapus
+    await docRef.delete();
+
+    // 5. Log Aktivitas
+    await logCompanyActivity(idCompany, {
+      actorEmail: email,
+      actorName: nama || "User",
+      target: id,
+      action: "DELETE_REIMBURSE",
+      description: `Menghapus reimburse '${data.title}' (Status: ${data.status})`,
+    });
+
+    return res.status(200).json({
+      message: "Data reimburse berhasil dihapus.",
+      id: id,
+    });
+  } catch (error) {
+    console.error("Error Delete Reimburse:", error);
+    return res
+      .status(500)
+      .json({ message: "Server Error", error: error.message });
+  }
+});
 module.exports = router;
