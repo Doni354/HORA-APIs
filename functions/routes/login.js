@@ -727,7 +727,7 @@ router.post("/register-employee", async (req, res) => {
 });
 
 // ==================================================================
-// 3. ROUTE: REQUEST RESET DEVICE (USER -> EMAIL ADMIN)
+// 3. ROUTE: REQUEST RESET DEVICE (DYNAMIC: ADMIN OR SELF)
 // ==================================================================
 router.post("/request-reset-device", async (req, res) => {
   try {
@@ -755,92 +755,119 @@ router.post("/request-reset-device", async (req, res) => {
       return res.status(404).json({ message: "User tidak ditemukan." });
 
     const userData = userDoc.data();
-    const idCompany = userData.idCompany;
 
-    if (!idCompany)
-      return res
-        .status(400)
-        .json({ message: "User tidak terdaftar di perusahaan." });
+    // --- LOGIKA BARU DIMULAI DI SINI ---
 
-    // B. Cari Email Admin
-    const companyDoc = await db.collection("companies").doc(idCompany).get();
-    if (!companyDoc.exists)
-      return res.status(404).json({ message: "Perusahaan tidak ditemukan." });
-    const adminEmail = companyDoc.data().createdBy;
+    // Variabel dinamis untuk menentukan tujuan email
+    let targetEmail = "";
+    let emailSubject = "";
+    let emailGreeting = "";
+    let emailBodyIntro = "";
+    let companyIdForToken = null;
 
-    if (!adminEmail)
-      return res
-        .status(500)
-        .json({ message: "Email admin perusahaan tidak ditemukan." });
+    // B. Cek Apakah User Punya Perusahaan (Logic Cabang)
+    if (userData.idCompany) {
+      // --- SKENARIO 1: USER KORPORAT (Kirim ke Admin) ---
+      const companyDoc = await db
+        .collection("companies")
+        .doc(userData.idCompany)
+        .get();
+
+      if (!companyDoc.exists) {
+        // Jika ID ada tapi datanya hilang, fallback ke reset mandiri atau error (di sini kita error kan saja demi keamanan data)
+        return res
+          .status(404)
+          .json({ message: "Data perusahaan tidak ditemukan." });
+      }
+
+      const adminEmail = companyDoc.data().createdBy;
+      if (!adminEmail) {
+        return res
+          .status(500)
+          .json({ message: "Email admin perusahaan tidak ditemukan." });
+      }
+
+      // Set Variabel untuk Admin
+      targetEmail = adminEmail;
+      companyIdForToken = userData.idCompany;
+      emailSubject = `ACTION REQUIRED: Reset Device Request - ${userData.username}`;
+      emailGreeting = "Halo Admin,";
+      emailBodyIntro = `<p>Pegawai Anda <b>${userData.username}</b> (${email}) meminta izin untuk login menggunakan perangkat baru.</p>`;
+    } else {
+      // --- SKENARIO 2: USER INDIVIDU (Kirim ke Diri Sendiri) ---
+
+      // Set Variabel untuk User Sendiri
+      targetEmail = email; // Kirim ke email yang sedang login
+      companyIdForToken = "INDIVIDUAL"; // Penanda bahwa ini user tanpa perusahaan
+      emailSubject = `KONFIRMASI: Permintaan Reset Device Anda`;
+      emailGreeting = `Halo ${userData.username || "User"},`;
+      emailBodyIntro = `<p>Anda telah meminta untuk mereset perangkat agar dapat login di perangkat baru.</p>`;
+    }
 
     // C. Generate Token Khusus untuk Link Reset (Berlaku 3 Hari)
-    // Token ini berisi 'action' khusus agar tidak bisa dipakai login biasa
     const resetActionToken = jwt.sign(
       {
-        action: "RESET_DEVICE_CONFIRMATION", // Marker khusus
-        targetUserEmail: email, // Siapa yang mau direset
-        companyId: idCompany, // Security tambahan
+        action: "RESET_DEVICE_CONFIRMATION",
+        targetUserEmail: email,
+        companyId: companyIdForToken,
       },
       process.env.JWT_SECRET,
       { expiresIn: "3d" }
     );
 
-    // Link yang akan diklik Admin (GET Request)
-    // GANTI BASE URL SESUAI URL PROJECT FIREBASE FUNCTION KAMU
-    const baseUrl = "https://api-y4ntpb3uvq-et.a.run.app/";
+    // Link yang akan diklik (Sama, hanya beda siapa yang klik)
+    const baseUrl = "https://api-y4ntpb3uvq-et.a.run.app/"; // Pastikan ini URL production Anda
     const resetLink = `${baseUrl}/api/Login/admin/confirm-reset-device?token=${resetActionToken}`;
 
-    // D. Kirim Email ke Admin
+    // D. Kirim Email (Dinamis sesuai targetEmail)
     await db.collection("mail").add({
-      to: adminEmail,
+      to: targetEmail,
       message: {
-        subject: `ACTION REQUIRED: Reset Device Request - ${userData.username}`,
+        subject: emailSubject,
         html: `
-                  <div style="font-family: sans-serif; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
-                      <h2 style="color: #d32f2f;">Permohonan Reset Perangkat</h2>
-                      <p>Halo Admin,</p>
-                      <p>Pegawai Anda <b>${
-                        userData.username
-                      }</b> (${email}) meminta izin untuk login menggunakan perangkat baru.</p>
-                      
-                      <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
-                          <strong>Alasan:</strong><br>
-                          "${reason}"
-                          <br><br>
-                          <strong>Perangkat Lama:</strong><br>
-                          ${userData.deviceInfo || "Unknown Device"}
-                      </div>
+          <div style="font-family: sans-serif; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
+              <h2 style="color: #d32f2f;">Permohonan Reset Perangkat</h2>
+              <p>${emailGreeting}</p>
+              ${emailBodyIntro}
+              
+              <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                  <strong>Alasan:</strong><br>
+                  "${reason}"
+                  <br><br>
+                  <strong>Perangkat Lama:</strong><br>
+                  ${userData.deviceInfo || "Unknown Device"}
+              </div>
 
-                      <p>Jika Anda menyetujui, silakan klik tombol di bawah ini. Device lama akan dihapus dari sistem, dan user dapat login di device baru.</p>
+              <p>Jika ${
+                userData.idCompany ? "Anda menyetujui" : "ini benar Anda"
+              }, silakan klik tombol di bawah ini. Device lama akan dihapus dari sistem, dan user dapat login di device baru.</p>
 
-                      <a href="${resetLink}" style="background-color: #d32f2f; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">
-                          SETUJUI & RESET DEVICE
-                      </a>
+              <a href="${resetLink}" style="background-color: #d32f2f; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">
+                  ${
+                    userData.idCompany
+                      ? "SETUJUI & RESET DEVICE"
+                      : "KONFIRMASI RESET SAYA"
+                  }
+              </a>
 
-                      <p style="margin-top: 20px; font-size: 12px; color: #666;">
-                          Link ini aman dan hanya berlaku selama 3 hari. Jangan bagikan email ini ke orang lain.
-                      </p>
-                  </div>
-              `,
+              <p style="margin-top: 20px; font-size: 12px; color: #666;">
+                  Link ini aman dan hanya berlaku selama 3 hari. Jangan bagikan email ini ke orang lain.
+              </p>
+          </div>
+        `,
       },
     });
 
-    // --- LOG ACTIVITY: REQUEST ---
-    await logCompanyActivity(idCompany, {
-      actorEmail: email,
-      actorName: userData.username,
-      target: "Admin",
-      action: "REQUEST_RESET_DEVICE",
-      description: `User requesting device reset. Reason: ${reason}`,
-    });
-
     return res.status(200).json({
-      message: "Permohonan terkirim ke Admin.",
-      info: "Silakan tunggu persetujuan Admin via Email.",
+      message: userData.idCompany
+        ? "Permintaan terkirim ke Admin perusahaan."
+        : "Email konfirmasi telah dikirim ke email Anda.",
     });
-  } catch (e) {
-    console.error("Request Reset Error:", e);
-    return res.status(500).json({ message: "Gagal mengirim permohonan." });
+  } catch (error) {
+    console.error("Error requesting reset:", error);
+    return res
+      .status(500)
+      .json({ message: "Terjadi kesalahan internal server." });
   }
 });
 
