@@ -166,33 +166,21 @@ router.get("/list", verifyToken, async (req, res) => {
 });
 
 // ---------------------------------------------------------
-// 3. PROSES IZIN (Terima / Tolak) - Admin Only
+// 3. UPDATE IZIN (Edit Data oleh Owner ATAU Proses Status oleh Admin)
 // ---------------------------------------------------------
-router.put("/:leaveId/status", verifyToken, async (req, res) => {
+router.put("/:leaveId", verifyToken, async (req, res) => {
   try {
     const { leaveId } = req.params;
-    const { status, rejectionReason } = req.body;
     const user = req.user;
+    const body = req.body; // Data yang dikirim (bisa status, bisa data izin)
 
-    if (user.role !== "admin") {
-      return res
-        .status(403)
-        .json({ message: "Hanya Admin yang dapat memproses izin." });
-    }
-
-    if (!["approved", "rejected", "pending"].includes(status)) {
-      return res
-        .status(400)
-        .json({
-          message: "Status harus 'approved' atau 'rejected' atau 'pending'.",
-        });
-    }
-
+    // 1. Ambil Data Existing
     const leaveRef = db
       .collection("companies")
       .doc(user.idCompany)
       .collection("leaves")
       .doc(leaveId);
+    
     const leaveDoc = await leaveRef.get();
 
     if (!leaveDoc.exists) {
@@ -200,43 +188,146 @@ router.put("/:leaveId/status", verifyToken, async (req, res) => {
     }
 
     const currentData = leaveDoc.data();
+    const isOwner = currentData.userId === user.email;
+    const isAdmin = user.role === "admin";
 
-    const updatePayload = {
-      status: status,
-      processedBy: user.email,
-      processedAt: Timestamp.now(), // FIX: Gunakan Timestamp langsung
-      // FIX: Gunakan FieldValue langsung dari import
-      history: FieldValue.arrayUnion({
-        status: status,
-        by: user.email,
-        at: new Date(),
-        reason: rejectionReason || "-",
-      }),
-    };
-
-    if (status === "rejected" && rejectionReason) {
-      updatePayload.rejectionReason = rejectionReason;
+    // Validasi Dasar Akses
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ message: "Anda tidak memiliki akses ke data ini." });
     }
 
+    let updatePayload = {
+      updatedAt: Timestamp.now(),
+    };
+    let logAction = "";
+    let logDesc = "";
+
+    // =========================================================
+    // SKENARIO A: ADMIN MENGUBAH STATUS (Approve / Reject)
+    // =========================================================
+    if (body.status) {
+      // Validasi: Hanya Admin yang boleh kirim field 'status'
+      if (!isAdmin) {
+        return res.status(403).json({ message: "Hanya Admin yang boleh mengubah status izin." });
+      }
+
+      // Validasi Input Status
+      if (!["approved", "rejected", "pending"].includes(body.status)) {
+        return res.status(400).json({ message: "Status tidak valid." });
+      }
+
+      updatePayload.status = body.status;
+      updatePayload.processedBy = user.email;
+      updatePayload.processedAt = Timestamp.now();
+      
+      // Tambah History
+      updatePayload.history = FieldValue.arrayUnion({
+        status: body.status,
+        by: user.email,
+        at: new Date(),
+        reason: body.rejectionReason || "-",
+      });
+
+      // Jika Rejected, simpan alasannya
+      if (body.status === "rejected" && body.rejectionReason) {
+        updatePayload.rejectionReason = body.rejectionReason;
+      }
+
+      logAction = body.status === "approved" ? "APPROVE_LEAVE" : "REJECT_LEAVE";
+      logDesc = `Admin ${user.nama} mengubah status menjadi ${body.status}.`;
+    } 
+    
+    // =========================================================
+    // SKENARIO B: OWNER MENGEDIT DATA (Reset ke Pending)
+    // =========================================================
+    else {
+      // Validasi: Hanya Owner yang boleh edit data (sesuai request Anda)
+      if (!isOwner) {
+        return res.status(403).json({ message: "Hanya pembuat izin yang dapat mengedit data." });
+      }
+
+      // Validasi: Tidak boleh edit jika sudah Approved
+      if (currentData.status === "approved") {
+        return res.status(400).json({ message: "Izin yang sudah disetujui tidak dapat diedit." });
+      }
+
+      // Masukkan data baru ke payload
+      if (body.tipeIzin) updatePayload.tipeIzin = body.tipeIzin;
+      if (body.keterangan) updatePayload.keterangan = body.keterangan;
+      if (body.startDate) updatePayload.startDate = new Date(body.startDate);
+      if (body.endDate) updatePayload.endDate = new Date(body.endDate);
+
+      // FORCE RESET STATUS KE PENDING (Karena data berubah)
+      updatePayload.status = "pending";
+      // Hapus alasan penolakan lama (jika ada) agar bersih
+      updatePayload.rejectionReason = FieldValue.delete(); 
+
+      updatePayload.history = FieldValue.arrayUnion({
+        status: "edited",
+        by: user.email,
+        at: new Date(),
+        note: "Data diedit oleh user (Status reset ke Pending)",
+      });
+
+      // --- LOGIC GANTI FILE (Jika ada fileId baru) ---
+      if (body.fileId && body.fileId !== currentData.attachmentFileId) {
+        // 1. Ambil info file baru
+        const newFileRef = db.collection("companies").doc(user.idCompany).collection("files").doc(body.fileId);
+        const newFileDoc = await newFileRef.get();
+
+        if (!newFileDoc.exists) {
+          return res.status(404).json({ message: "File baru tidak ditemukan." });
+        }
+        const newFileData = newFileDoc.data();
+
+        // 2. Hapus file lama dari Storage (Cleanup)
+        if (currentData.attachmentPath) {
+          try {
+            await bucket.file(currentData.attachmentPath).delete();
+          } catch (err) {
+            console.warn("Gagal hapus file lama:", err.message);
+          }
+        }
+
+        // 3. Update metadata file baru
+        await newFileRef.update({
+          category: "LEAVE_ATTACHMENT",
+          relatedTo: "Employee Leave (Edited)",
+          updatedAt: Timestamp.now(),
+        });
+
+        // 4. Masukkan ke payload
+        updatePayload.attachmentFileId = body.fileId;
+        updatePayload.attachmentUrl = newFileData.downloadUrl;
+        updatePayload.attachmentPath = newFileData.storagePath;
+        updatePayload.attachmentName = newFileData.fileName;
+      }
+
+      logAction = "EDIT_LEAVE";
+      logDesc = `${user.nama} mengedit data izin (Status reset ke Pending).`;
+    }
+
+    // 2. Eksekusi Update ke Firestore
     await leaveRef.update(updatePayload);
 
-    const actionText = status === "approved" ? "menerima" : "menolak";
-
+    // 3. Log Aktivitas
     await logCompanyActivity(user.idCompany, {
       actorEmail: user.email,
       actorName: user.nama,
       target: leaveId,
-      action: status === "approved" ? "APPROVE_LEAVE" : "REJECT_LEAVE",
-      description: `Admin ${user.nama} ${actionText} izin ${currentData.tipeIzin} dari ${currentData.userName}.`,
+      action: logAction,
+      description: logDesc,
     });
 
-    return res.status(200).json({ message: `Berhasil ${actionText} izin.` });
+    return res.status(200).json({ 
+      message: logAction === "EDIT_LEAVE" ? "Data berhasil diubah." : "Status berhasil diperbarui." 
+    });
+
   } catch (e) {
-    console.error("Process Leave Error:", e);
-    return res.status(500).json({ message: "Server Error" });
+    console.error("Update Leave Error:", e);
+    return res.status(500).json({ message: "Server Error", error: e.message });
   }
 });
-
 // ---------------------------------------------------------
 // 4. HAPUS IZIN (Delete)
 // ---------------------------------------------------------
