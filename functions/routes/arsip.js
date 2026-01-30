@@ -660,6 +660,10 @@ router.get("/statreimburse", async (req, res) => {
           status: data.status || "-",
           statusCode: data.statusCode,
           evidence: data.evidence ? data.evidence.fileUrl : null,
+          
+          // UPDATED: Ambil data kategori dan alamat
+          category: data.category || "Umum",
+          address: data.address || "-"
         };
       });
     }
@@ -683,7 +687,12 @@ router.get("/statreimburse", async (req, res) => {
             <td style="padding: 8px;">${index + 1}</td>
             <td style="padding: 8px;">${formatDateIndo(row.date)}</td>
             <td style="padding: 8px;">${row.requestByName}</td>
-            <td style="padding: 8px;">${row.title}</td>
+            <td style="padding: 8px;">${row.category}</td> <!-- UPDATED: Kolom Kategori -->
+            <td style="padding: 8px;">
+                ${row.title}
+                <br>
+                <small style="color: #777; font-size: 11px;">${row.address}</small> <!-- UPDATED: Alamat dibawah judul -->
+            </td>
             <td style="padding: 8px;">${formatRupiah(row.amount)}</td>
             <td style="padding: 8px; font-weight: bold; color: ${statusColor};">${row.status}</td>
             <td style="padding: 8px;">${buktiLink}</td>
@@ -691,14 +700,16 @@ router.get("/statreimburse", async (req, res) => {
       });
       
       // Tambahkan baris Total
+      // Colspan disesuaikan: Total 8 kolom (No, Tgl, Nama, Kat, Judul, Jml, Sts, Bukti)
+      // Label "Total" memakan 5 kolom pertama
       tableRows += `
         <tr style="background-color: #f9f9f9; font-weight: bold;">
-            <td colspan="4" style="padding: 10px; text-align: right;">Total (Disetujui/Pending):</td>
+            <td colspan="5" style="padding: 10px; text-align: right;">Total (Disetujui/Pending):</td>
             <td colspan="3" style="padding: 10px;">${formatRupiah(totalPengeluaran)}</td>
         </tr>
       `;
     } else {
-      tableRows = `<tr><td colspan="7" style="padding: 20px; text-align: center;">Tidak ada data reimburse.</td></tr>`;
+      tableRows = `<tr><td colspan="8" style="padding: 20px; text-align: center;">Tidak ada data reimburse.</td></tr>`;
     }
 
     // --- TOMBOL EXPORT ---
@@ -724,7 +735,8 @@ router.get("/statreimburse", async (req, res) => {
               <th style="padding: 8px; border-bottom: 2px solid #ddd;">No</th>
               <th style="padding: 8px; border-bottom: 2px solid #ddd;">Tanggal</th>
               <th style="padding: 8px; border-bottom: 2px solid #ddd;">Karyawan</th>
-              <th style="padding: 8px; border-bottom: 2px solid #ddd;">Judul</th>
+              <th style="padding: 8px; border-bottom: 2px solid #ddd;">Kategori</th> <!-- UPDATED -->
+              <th style="padding: 8px; border-bottom: 2px solid #ddd;">Judul & Alamat</th> <!-- UPDATED -->
               <th style="padding: 8px; border-bottom: 2px solid #ddd;">Jumlah</th>
               <th style="padding: 8px; border-bottom: 2px solid #ddd;">Status</th>
               <th style="padding: 8px; border-bottom: 2px solid #ddd;">Bukti</th>
@@ -780,11 +792,14 @@ router.get("/export/reimburse", async (req, res) => {
     const worksheet = workbook.addWorksheet("Laporan Reimburse");
 
     // Setup Kolom
+    // UPDATED: Menambahkan Kategori dan Alamat
     worksheet.columns = [
       { header: "No", key: "no", width: 5 },
       { header: "Tanggal", key: "date", width: 15 },
       { header: "Nama Karyawan", key: "nama", width: 25 },
+      { header: "Kategori", key: "category", width: 20 }, // NEW: Kolom Kategori
       { header: "Judul Pengajuan", key: "title", width: 30 },
+      { header: "Alamat", key: "address", width: 30 },   // NEW: Kolom Alamat
       { header: "Deskripsi", key: "desc", width: 35 },
       { header: "Jumlah (Rp)", key: "amount", width: 20 },
       { header: "Status", key: "status", width: 15 },
@@ -801,7 +816,9 @@ router.get("/export/reimburse", async (req, res) => {
         no: index++,
         date: formatDateIndo(data.date),
         nama: data.requestByName || data.requestByEmail || "-",
+        category: data.category || "Umum", // NEW
         title: data.title || "-",
+        address: data.address || "-",       // NEW
         desc: data.description || "-",
         amount: data.amount || 0,
         status: data.status || "Tunggakan",
@@ -833,7 +850,7 @@ router.get("/export/reimburse", async (req, res) => {
     );
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename=Laporan_Reimburse_${idperusahaan}.xlsx`
+      "attachment; filename=Laporan_Reimburse_" + idperusahaan + ".xlsx"
     );
 
     await workbook.xlsx.write(res);
@@ -843,4 +860,5 @@ router.get("/export/reimburse", async (req, res) => {
     res.status(500).send("Gagal download excel");
   }
 });
+
 module.exports = router;

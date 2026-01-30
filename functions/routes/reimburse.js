@@ -94,7 +94,8 @@ router.get("/list", verifyToken, async (req, res) => {
 // ---------------------------------------------------------
 router.post("/create", verifyToken, async (req, res) => {
   try {
-    const { title, description, amount, date, fileId } = req.body;
+    // UPDATED: Menambahkan input address dan category
+    const { title, description, amount, date, fileId, address, category } = req.body;
     const { idCompany, email, nama, role } = req.user;
 
     // 1. Validasi Input Wajib (Title & Desc Opsional)
@@ -119,6 +120,11 @@ router.post("/create", verifyToken, async (req, res) => {
     const newReimburse = {
       title: finalTitle,
       description: description || "",
+      
+      // UPDATED: Menyimpan data alamat dan kategori
+      address: address || "", 
+      category: category || "Umum", // Default ke "Umum" jika kosong
+
       amount: Number(amount),
       date: Timestamp.fromDate(new Date(date)),
 
@@ -155,7 +161,7 @@ router.post("/create", verifyToken, async (req, res) => {
       actorName: nama || "User",
       target: docRef.id,
       action: "CREATE_REIMBURSE",
-      description: `Mengajukan reimburse: ${finalTitle} sebesar Rp${amount}`,
+      description: `Mengajukan reimburse: ${finalTitle} (${newReimburse.category}) sebesar Rp${amount}`,
     });
 
     return res.status(201).json({
