@@ -11,7 +11,14 @@ const BASE_URL = "https://api-y4ntpb3uvq-et.a.run.app/api/arsip";
 // ---------------------------------------------------------
 // HELPER FUNCTIONS
 // ---------------------------------------------------------
-
+// Helper Format Rupiah untuk Email
+const formatRupiah = (angka) => {
+  return new Intl.NumberFormat("id-ID", {
+    style: "currency",
+    currency: "IDR",
+    minimumFractionDigits: 0,
+  }).format(angka);
+};
 const formatDateIndo = (timestamp) => {
   if (!timestamp) return "-";
   const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
@@ -589,4 +596,251 @@ router.get("/export/kehadiran", async (req, res) => {
   }
 });
 
+
+// ---------------------------------------------------------
+// 6. GET /statreimburse -> Kirim Email Laporan Reimburse (+ Tombol Download)
+// ---------------------------------------------------------
+router.get("/statreimburse", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization || "";
+    const { idperusahaan, tglstart, tglend, emailrep } = req.query;
+
+    // 1. Auth Check (Menyesuaikan style arsip.js)
+    if (!authHeader.startsWith("Bearer ")) {
+      return res.status(203).send("Unauthorized");
+    }
+
+    // 2. Validation
+    if (!idperusahaan || !tglstart || !tglend || !emailrep) {
+      return res.status(400).json({ message: "Missing required parameters" });
+    }
+
+    const startDate = new Date(tglstart);
+    const endDate = new Date(tglend);
+    // Pastikan endDate mencakup sampai akhir hari tersebut
+    endDate.setHours(23, 59, 59, 999);
+
+    // 3. Get Company Info
+    const companyRef = db.collection("companies").doc(idperusahaan);
+    const companySnap = await companyRef.get();
+    let namaPerusahaanDisplay = idperusahaan;
+    if (companySnap.exists && companySnap.data().namaPerusahaan) {
+      namaPerusahaanDisplay = companySnap.data().namaPerusahaan;
+    }
+
+    // 4. Fetch Reimbursements
+    // Note: Pastikan field di database adalah 'date' (timestamp)
+    const snapshot = await db
+      .collection("companies")
+      .doc(idperusahaan)
+      .collection("reimbursements")
+      .where("date", ">=", startDate)
+      .where("date", "<=", endDate)
+      .orderBy("date", "desc")
+      .get();
+
+    let reportData = [];
+    let totalPengeluaran = 0;
+
+    if (!snapshot.empty) {
+      reportData = snapshot.docs.map((doc) => {
+        const data = doc.data();
+        
+        // Hitung total (Hanya yang Lunas atau Tunggakan, yang Ditolak/Code 2 tidak dihitung)
+        // Code 2 = Ditolak, Code 1 = Lunas, Code 0 = Tunggakan
+        if (data.statusCode !== 2) {
+            totalPengeluaran += (Number(data.amount) || 0);
+        }
+
+        return {
+          title: data.title || "-",
+          requestByName: data.requestByName || data.requestByEmail || "-",
+          date: data.date,
+          amount: data.amount || 0,
+          status: data.status || "-",
+          statusCode: data.statusCode,
+          evidence: data.evidence ? data.evidence.fileUrl : null,
+        };
+      });
+    }
+
+    // 5. Generate HTML Table
+    let tableRows = "";
+    if (reportData.length > 0) {
+      reportData.forEach((row, index) => {
+        const buktiLink = row.evidence
+          ? `<a href="${row.evidence}" style="color: #007bff; text-decoration: none;">Lihat Bukti</a>`
+          : "-";
+
+        // Warna status
+        let statusColor = "#555";
+        if (row.statusCode === 1) statusColor = "green"; // Lunas
+        if (row.statusCode === 2) statusColor = "red";   // Ditolak
+        if (row.statusCode === 0) statusColor = "#d35400"; // Tunggakan
+
+        tableRows += `
+          <tr style="border-bottom: 1px solid #eee;">
+            <td style="padding: 8px;">${index + 1}</td>
+            <td style="padding: 8px;">${formatDateIndo(row.date)}</td>
+            <td style="padding: 8px;">${row.requestByName}</td>
+            <td style="padding: 8px;">${row.title}</td>
+            <td style="padding: 8px;">${formatRupiah(row.amount)}</td>
+            <td style="padding: 8px; font-weight: bold; color: ${statusColor};">${row.status}</td>
+            <td style="padding: 8px;">${buktiLink}</td>
+          </tr>`;
+      });
+      
+      // Tambahkan baris Total
+      tableRows += `
+        <tr style="background-color: #f9f9f9; font-weight: bold;">
+            <td colspan="4" style="padding: 10px; text-align: right;">Total (Disetujui/Pending):</td>
+            <td colspan="3" style="padding: 10px;">${formatRupiah(totalPengeluaran)}</td>
+        </tr>
+      `;
+    } else {
+      tableRows = `<tr><td colspan="7" style="padding: 20px; text-align: center;">Tidak ada data reimburse.</td></tr>`;
+    }
+
+    // --- TOMBOL EXPORT ---
+    // Link ini mengarah ke endpoint baru /export/reimburse
+    const exportLink = `${BASE_URL}/export/reimburse?idperusahaan=${idperusahaan}&tglstart=${tglstart}&tglend=${tglend}`;
+
+    const htmlContent = `
+      <div style="font-family: Arial, sans-serif; color: #333;">
+        <h2 style="color: #2c3e50;">Laporan Reimburse</h2>
+        <p>Perusahaan: <strong>${namaPerusahaanDisplay}</strong></p>
+        <p>Periode: ${formatDateIndo(startDate)} s/d ${formatDateIndo(endDate)}</p>
+        
+        <div style="margin: 20px 0;">
+          <a href="${exportLink}" target="_blank" 
+             style="background-color: #28a745; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold;">
+             Download Laporan Excel (.xlsx)
+          </a>
+        </div>
+
+        <table style="width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 13px;">
+          <thead>
+            <tr style="background-color: #f2f2f2; text-align: left;">
+              <th style="padding: 8px; border-bottom: 2px solid #ddd;">No</th>
+              <th style="padding: 8px; border-bottom: 2px solid #ddd;">Tanggal</th>
+              <th style="padding: 8px; border-bottom: 2px solid #ddd;">Karyawan</th>
+              <th style="padding: 8px; border-bottom: 2px solid #ddd;">Judul</th>
+              <th style="padding: 8px; border-bottom: 2px solid #ddd;">Jumlah</th>
+              <th style="padding: 8px; border-bottom: 2px solid #ddd;">Status</th>
+              <th style="padding: 8px; border-bottom: 2px solid #ddd;">Bukti</th>
+            </tr>
+          </thead>
+          <tbody>${tableRows}</tbody>
+        </table>
+        <p style="margin-top: 20px; font-size: 11px; color: #777;">Generated by Hora App.</p>
+      </div>
+    `;
+
+    await db.collection("mail").add({
+      to: [emailrep],
+      message: {
+        subject: `Laporan Reimburse - ${namaPerusahaanDisplay}`,
+        html: htmlContent,
+      },
+      createdAt: new Date(),
+    });
+
+    return res.status(200).send("Report has been emailed");
+  } catch (e) {
+    console.error("Statistik Reimburse error:", e);
+    return res.status(500).json({ message: "Error", error: e.message });
+  }
+});
+
+// ---------------------------------------------------------
+// 7. GET /export/reimburse - DOWNLOAD Excel Reimburse (Stream)
+// ---------------------------------------------------------
+router.get("/export/reimburse", async (req, res) => {
+  try {
+    const { idperusahaan, tglstart, tglend } = req.query;
+
+    if (!idperusahaan || !tglstart || !tglend) {
+      return res.status(400).send("Parameter tidak lengkap");
+    }
+
+    const startDate = new Date(tglstart);
+    const endDate = new Date(tglend);
+    endDate.setHours(23, 59, 59, 999);
+
+    const snapshot = await db
+      .collection("companies")
+      .doc(idperusahaan)
+      .collection("reimbursements")
+      .where("date", ">=", startDate)
+      .where("date", "<=", endDate)
+      .orderBy("date", "desc")
+      .get();
+
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet("Laporan Reimburse");
+
+    // Setup Kolom
+    worksheet.columns = [
+      { header: "No", key: "no", width: 5 },
+      { header: "Tanggal", key: "date", width: 15 },
+      { header: "Nama Karyawan", key: "nama", width: 25 },
+      { header: "Judul Pengajuan", key: "title", width: 30 },
+      { header: "Deskripsi", key: "desc", width: 35 },
+      { header: "Jumlah (Rp)", key: "amount", width: 20 },
+      { header: "Status", key: "status", width: 15 },
+      { header: "Link Bukti", key: "evidence", width: 25 },
+      { header: "Diproses Oleh", key: "processedBy", width: 25 },
+      { header: "Tanggal Proses", key: "processedAt", width: 15 },
+    ];
+    worksheet.getRow(1).font = { bold: true };
+
+    let index = 1;
+    snapshot.forEach((doc) => {
+      const data = doc.data();
+      const row = worksheet.addRow({
+        no: index++,
+        date: formatDateIndo(data.date),
+        nama: data.requestByName || data.requestByEmail || "-",
+        title: data.title || "-",
+        desc: data.description || "-",
+        amount: data.amount || 0,
+        status: data.status || "Tunggakan",
+        evidence: data.evidence ? "Klik Disini" : "-",
+        processedBy: data.processedBy || "-",
+        processedAt: formatDateIndo(data.processedAt),
+      });
+
+      // Format Currency Excel
+      row.getCell("amount").numFmt = '"Rp"#,##0';
+
+      // Hyperlink Bukti
+      if (data.evidence && data.evidence.fileUrl) {
+        row.getCell("evidence").value = {
+          text: "Buka Bukti",
+          hyperlink: data.evidence.fileUrl,
+        };
+        row.getCell("evidence").font = {
+          color: { argb: "FF0000FF" },
+          underline: true,
+        };
+      }
+    });
+
+    // STREAM DOWNLOAD LANGSUNG
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=Laporan_Reimburse_${idperusahaan}.xlsx`
+    );
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (e) {
+    console.error("Export Reimburse error:", e);
+    res.status(500).send("Gagal download excel");
+  }
+});
 module.exports = router;
