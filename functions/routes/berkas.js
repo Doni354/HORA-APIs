@@ -7,11 +7,7 @@ const { logCompanyActivity } = require("../helper/logCompanyActivity");
 const Busboy = require("busboy");
 const path = require("path");
 const { Timestamp } = require("firebase-admin/firestore");
-const {
-  uploadFileBerkas,
-  formatFileSize,
-  parseSizeStringToBytes,
-} = require("../helper/uploadFile");
+const {uploadFileBerkas,formatFileSize,parseSizeStringToBytes, } = require("../helper/uploadFile");
 
 // ---------------------------------------------------------
 // POST /upload - Upload File dengan Kategori
@@ -56,6 +52,7 @@ router.post("/upload", verifyToken, async (req, res) => {
 
       createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
+      updatedBy: null,
     };
 
     const docRef = await db
@@ -148,6 +145,8 @@ router.get("/list", verifyToken, async (req, res) => {
         category: data.category || "general",
         uploaderName: data.uploaderName,
         createdAt: data.createdAt ? data.createdAt.toDate() : null,
+        updatedAt: data.updatedAt || null,
+        updatedBy: data.updatedBy || null
       });
     });
 
@@ -268,6 +267,7 @@ router.put("/:fileId", verifyToken, async (req, res) => {
     await fileRef.update({
       fileName: newFileName,
       updatedAt: Timestamp.now(),
+      updatedBy: user.nama,
     });
 
     await logCompanyActivity(user.idCompany, {
