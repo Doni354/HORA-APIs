@@ -467,98 +467,56 @@ router.get("/confirm-email", async (req, res) => {
     res.status(500).send("Terjadi kesalahan server.");
   }
 });
-
-// Helper Function: Membuat kode acak
-// Kita hindari huruf 'I', 'O' dan angka '0', '1' agar tidak membingungkan user
-function generateCompanyCode(length = 6) {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+function generateSmartCompanyCode(length) {
+  // Karakter yang mudah dibaca (menghilangkan I, L, 1, O, 0 untuk menghindari typo/mirip)
+  const charset = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let result = "";
+  const randomBytes = crypto.randomBytes(length);
   for (let i = 0; i < length; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
+    result += charset[randomBytes[i] % charset.length];
   }
-  return result; // Contoh output: "K9X2M4" atau "TR5W22"
+  return result;
 }
-
 // ---------------------------------------------------------
-// REGISTRASI PERUSAHAAN (Via Google Sign-In) + Activity Log
+// 1. REGISTRASI PERUSAHAAN (Auto-Scaling ID + Initial Quota)
 // ---------------------------------------------------------
 router.post("/registrasi", async (req, res) => {
-  // LOG PERTAMA: Membuktikan request masuk ke kode ini
-  console.log(">>> [START] Request Registrasi Masuk!");
-
   try {
     let idToken = "";
-
-    // CARA 1: Cek Authorization Header (Standar API - Recommended)
-    // Format: "Bearer eyJhbGci..."
-    if (
-      req.headers.authorization &&
-      req.headers.authorization.startsWith("Bearer ")
-    ) {
-      console.log(">>> Token ditemukan di Header");
+    if (req.headers.authorization && req.headers.authorization.startsWith("Bearer ")) {
       idToken = req.headers.authorization.split("Bearer ")[1];
-    }
-    // CARA 2: Cek Body (Backup)
-    else if (req.body.idToken) {
-      console.log(">>> Token ditemukan di Body");
+    } else if (req.body.idToken) {
       idToken = req.body.idToken;
     }
 
-    // Validasi Kelengkapan Data Lainnya
     const { namaPerusahaan, alamatLoc, noTelp, noWA } = req.body;
-
     if (!idToken || !namaPerusahaan || !alamatLoc || !noTelp) {
-      console.log(">>> GAGAL: Data tidak lengkap");
-      return res.status(400).json({
-        message: "Data tidak lengkap. Token atau field lain kosong.",
-        received: { tokenExists: !!idToken, namaPerusahaan, alamatLoc },
-      });
+      return res.status(400).json({ message: "Data tidak lengkap." });
     }
 
-    // Bersihkan token
-    const tokenClean = idToken.toString().trim();
-
-    // Verifikasi ke Firebase
-    let decodedToken;
-    try {
-      decodedToken = await admin.auth().verifyIdToken(tokenClean);
-      console.log(">>> SUKSES: Token Valid untuk email:", decodedToken.email);
-    } catch (error) {
-      console.error(">>> GAGAL VERIFIKASI:", error);
-      // PENTING: Return error detail biar kita tau salahnya dimana
-      return res.status(401).json({
-        message: "TOKEN DITOLAK FIREBASE",
-        debug_info: {
-          error_code: error.code,
-          error_message: error.message,
-          token_snippet: tokenClean.substring(0, 10) + "...", // Cek apakah tokennya kebaca
-        },
-      });
-    }
-
-    // --- MULAI LOGIKA BISNIS ---
+    const decodedToken = await admin.auth().verifyIdToken(idToken.toString().trim());
     const email = decodedToken.email;
     const uid = decodedToken.uid;
-    const username = decodedToken.name || email.split("@")[0];
-    const photoURL = decodedToken.picture || "";
 
-    // Generate ID Company
+    // --- LOGIKA GENERATE ID DENGAN AUTO-SCALE ---
     let idCompany = "";
     let isUnique = false;
-    let attempt = 0;
+    let currentLength = 6; 
+    let totalAttempts = 0;
 
-    while (!isUnique && attempt < 5) {
-      const randomCode = generateCompanyCode(5);
-      idCompany = `C${randomCode}`;
+    while (!isUnique && totalAttempts < 15) {
+      idCompany = `C${generateSmartCompanyCode(currentLength)}`;
       const checkDoc = await db.collection("companies").doc(idCompany).get();
-      if (!checkDoc.exists) isUnique = true;
-      attempt++;
+      if (!checkDoc.exists) {
+        isUnique = true;
+      } else {
+        totalAttempts++;
+        if (totalAttempts % 5 === 0) currentLength++;
+      }
     }
 
-    if (!isUnique)
-      return res.status(500).json({ message: "Gagal generate ID Perusahaan." });
+    if (!isUnique) return res.status(500).json({ message: "Gagal generate ID unik." });
 
-    // Transaction Firestore
     await db.runTransaction(async (transaction) => {
       const userRef = db.collection("users").doc(email);
       const userDoc = await transaction.get(userRef);
@@ -566,22 +524,24 @@ router.post("/registrasi", async (req, res) => {
       if (userDoc.exists) throw new Error("USER_EXISTS");
 
       const companyRef = db.collection("companies").doc(idCompany);
-
-      const companyData = {
+      
+      // Setup Company dengan maxKaryawan: 10
+      transaction.set(companyRef, {
         idCompany,
         namaPerusahaan,
         alamatLoc,
         totalLike: 0,
+        maxKaryawan: 10, // <--- DEFAULT KUOTA
         createdAt: Timestamp.now(),
         createdBy: email,
         ownerUid: uid,
-      };
+      });
 
-      const userData = {
+      transaction.set(userRef, {
         uid,
-        username,
+        username: decodedToken.name || email.split("@")[0],
         alamatEmail: email,
-        photoURL,
+        photoURL: decodedToken.picture || "",
         noTelp,
         noWA: noWA || noTelp,
         role: "admin",
@@ -591,38 +551,23 @@ router.post("/registrasi", async (req, res) => {
         status: "active",
         verified: false,
         authProvider: "google",
-      };
-
-      transaction.set(companyRef, companyData);
-      transaction.set(userRef, userData);
+      });
     });
 
-    // --- TAMBAHAN: LOG AKTIFITAS COMPANY ---
-    // Karena ini adalah "Event Pertama" dari perusahaan (Pendaftaran),
-    // Kita catat bahwa Admin ini yang mendirikannya.
     await logCompanyActivity(idCompany, {
       actorEmail: email,
-      actorName: username,
-      target: idCompany,
+      actorName: decodedToken.name || email,
       action: "REGISTER_COMPANY",
-      description: `User ${username} mendaftarkan perusahaan baru: ${namaPerusahaan}`,
+      description: `Mendaftarkan perusahaan baru: ${namaPerusahaan} (Kuota: 10)`,
     });
 
     return res.status(200).json({
       message: "Registrasi Berhasil",
-      data: { companyCode: idCompany, companyName: namaPerusahaan },
+      data: { companyCode: idCompany, companyName: namaPerusahaan, maxKaryawan: 10 },
     });
+
   } catch (e) {
-    console.error(">>> SERVER ERROR:", e);
-    if (e.message === "USER_EXISTS") {
-      return res
-        .status(400)
-        .json({ message: "Email ini sudah terdaftar sebagai user lain." });
-    }
-    return res.status(500).json({
-      message: "Server Error",
-      error: e.message,
-    });
+    return res.status(500).json({ message: e.message === "USER_EXISTS" ? "Email sudah terdaftar." : "Server Error" });
   }
 });
 
