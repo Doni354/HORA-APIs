@@ -597,6 +597,7 @@ router.get("/export/kehadiran", async (req, res) => {
 });
 
 
+
 // ---------------------------------------------------------
 // 6. GET /statreimburse -> Kirim Email Laporan Reimburse (+ Tombol Download)
 // ---------------------------------------------------------
@@ -860,5 +861,276 @@ router.get("/export/reimburse", async (req, res) => {
     res.status(500).send("Gagal download excel");
   }
 });
+
+// ---------------------------------------------------------
+// 8. GET /stattugas -> Kirim Email Laporan Tugas (+ Tombol Download)
+// ---------------------------------------------------------
+router.get("/stattugas", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization || "";
+    const { idperusahaan, tglstart, tglend, emailrep } = req.query;
+
+    // 1. Auth Check
+    if (!authHeader.startsWith("Bearer ")) {
+      return res.status(203).send("Unauthorized");
+    }
+
+    // 2. Validation
+    if (!idperusahaan || !tglstart || !tglend || !emailrep) {
+      return res.status(400).json({ message: "Missing required parameters" });
+    }
+
+    const startDate = new Date(tglstart);
+    const endDate = new Date(tglend);
+    endDate.setHours(23, 59, 59, 999);
+
+    // 3. Get Company Info
+    const companyRef = db.collection("companies").doc(idperusahaan);
+    const companySnap = await companyRef.get();
+    let namaPerusahaanDisplay = idperusahaan;
+    if (companySnap.exists && companySnap.data().namaPerusahaan) {
+      namaPerusahaanDisplay = companySnap.data().namaPerusahaan;
+    }
+
+    // 4. Fetch Tasks (Filter berdasarkan Tanggal Pembuatan Tugas)
+    const snapshot = await db
+      .collection("companies")
+      .doc(idperusahaan)
+      .collection("tasks")
+      .where("createdAt", ">=", startDate)
+      .where("createdAt", "<=", endDate)
+      .orderBy("createdAt", "desc")
+      .get();
+
+    let reportData = [];
+    if (!snapshot.empty) {
+      reportData = snapshot.docs.map((doc) => {
+        const data = doc.data();
+        
+        // Handle Multi-Assign (Array to String)
+        let assignedNames = "-";
+        if (Array.isArray(data.assignedToName)) {
+            assignedNames = data.assignedToName.join(", ");
+        } else if (data.assignedToName) {
+            assignedNames = data.assignedToName; // Fallback data lama
+        }
+
+        // Cek Overdue Sederhana
+        let isOverdue = false;
+        if (data.deadline && data.status !== "Selesai") {
+            if (new Date() > data.deadline.toDate()) isOverdue = true;
+        }
+
+        return {
+          createdAt: data.createdAt,
+          description: data.description || "-",
+          assignedTo: assignedNames,
+          status: data.status || "Proses",
+          deadline: data.deadline || null,
+          finishedAt: data.finishedAt || null,
+          isOverdue: isOverdue
+        };
+      });
+    }
+
+    // 5. Generate HTML Table
+    let tableRows = "";
+    if (reportData.length > 0) {
+      reportData.forEach((row, index) => {
+        // Warna status
+        let statusColor = "#f39c12"; // Proses (Orange)
+        if (row.status === "Selesai") statusColor = "green";
+        if (row.status === "Tunda") statusColor = "#c0392b"; // Merah
+        
+        // Warna text jika overdue
+        const dateColor = row.isOverdue ? "red" : "#333";
+
+        tableRows += `
+          <tr style="border-bottom: 1px solid #eee;">
+            <td style="padding: 8px;">${index + 1}</td>
+            <td style="padding: 8px;">${formatDateIndo(row.createdAt)}</td>
+            <td style="padding: 8px;">${row.assignedTo}</td>
+            <td style="padding: 8px;">${row.description}</td>
+            <td style="padding: 8px; color: ${dateColor};">
+                ${formatDateIndo(row.deadline)}
+            </td>
+            <td style="padding: 8px; font-weight: bold; color: ${statusColor};">
+                ${row.status}
+            </td>
+            <td style="padding: 8px;">${formatDateIndo(row.finishedAt)}</td>
+          </tr>`;
+      });
+    } else {
+      tableRows = `<tr><td colspan="7" style="padding: 20px; text-align: center;">Tidak ada tugas dibuat pada periode ini.</td></tr>`;
+    }
+
+    // --- TOMBOL EXPORT ---
+    const exportLink = `${BASE_URL}/export/tugas?idperusahaan=${idperusahaan}&tglstart=${tglstart}&tglend=${tglend}`;
+
+    const htmlContent = `
+      <div style="font-family: Arial, sans-serif; color: #333;">
+        <h2 style="color: #2c3e50;">Laporan Tugas Karyawan</h2>
+        <p>Perusahaan: <strong>${namaPerusahaanDisplay}</strong></p>
+        <p>Periode: ${formatDateIndo(startDate)} s/d ${formatDateIndo(endDate)}</p>
+        
+        <div style="margin: 20px 0;">
+          <a href="${exportLink}" target="_blank" 
+             style="background-color: #28a745; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold;">
+             Download Laporan Excel (.xlsx)
+          </a>
+        </div>
+
+        <table style="width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 12px;">
+          <thead>
+            <tr style="background-color: #34495e; color: #fff; text-align: left;">
+              <th style="padding: 8px;">No</th>
+              <th style="padding: 8px;">Tanggal Dibuat</th>
+              <th style="padding: 8px;">Ditugaskan Ke</th>
+              <th style="padding: 8px;">Deskripsi Tugas</th>
+              <th style="padding: 8px;">Deadline</th>
+              <th style="padding: 8px;">Status</th>
+              <th style="padding: 8px;">Selesai Pada</th>
+            </tr>
+          </thead>
+          <tbody>${tableRows}</tbody>
+        </table>
+        <p style="margin-top: 20px; font-size: 11px; color: #777;">
+            *Warna merah pada tanggal deadline menandakan tugas melewati batas waktu saat laporan ini dibuat.
+        </p>
+      </div>
+    `;
+
+    await db.collection("mail").add({
+      to: [emailrep],
+      message: {
+        subject: `Laporan Tugas - ${namaPerusahaanDisplay}`,
+        html: htmlContent,
+      },
+      createdAt: new Date(),
+    });
+
+    return res.status(200).send("Report has been emailed");
+  } catch (e) {
+    console.error("Statistik Tugas error:", e);
+    return res.status(500).json({ message: "Error", error: e.message });
+  }
+});
+
+// ---------------------------------------------------------
+// 9. GET /export/tugas - DOWNLOAD Excel Tugas (Stream)
+// ---------------------------------------------------------
+router.get("/export/tugas", async (req, res) => {
+  try {
+    const { idperusahaan, tglstart, tglend } = req.query;
+
+    if (!idperusahaan || !tglstart || !tglend) {
+      return res.status(400).send("Parameter tidak lengkap");
+    }
+
+    const startDate = new Date(tglstart);
+    const endDate = new Date(tglend);
+    endDate.setHours(23, 59, 59, 999);
+
+    const snapshot = await db
+      .collection("companies")
+      .doc(idperusahaan)
+      .collection("tasks")
+      .where("createdAt", ">=", startDate)
+      .where("createdAt", "<=", endDate)
+      .orderBy("createdAt", "desc")
+      .get();
+
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet("Laporan Tugas");
+
+    // Setup Kolom
+    worksheet.columns = [
+      { header: "No", key: "no", width: 5 },
+      { header: "Tanggal Dibuat", key: "createdAt", width: 15 },
+      { header: "Ditugaskan Ke", key: "assignedTo", width: 30 },
+      { header: "Deskripsi", key: "desc", width: 40 },
+      { header: "Deadline", key: "deadline", width: 15 },
+      { header: "Status", key: "status", width: 15 },
+      { header: "Selesai Pada", key: "finishedAt", width: 15 },
+      { header: "Keterangan", key: "note", width: 20 }, // Untuk info telat
+    ];
+    
+    // Header Style
+    worksheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+    worksheet.getRow(1).fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF34495E" }, // Dark Blue Grey
+    };
+
+    let index = 1;
+    snapshot.forEach((doc) => {
+      const data = doc.data();
+
+      // Handle Array Names
+      let assignedNames = "-";
+      if (Array.isArray(data.assignedToName)) {
+          assignedNames = data.assignedToName.join(", ");
+      } else if (data.assignedToName) {
+          assignedNames = data.assignedToName;
+      }
+
+      // Logic Overdue
+      let note = "-";
+      const deadlineDate = data.deadline ? (data.deadline.toDate ? data.deadline.toDate() : new Date(data.deadline)) : null;
+      const finishedDate = data.finishedAt ? (data.finishedAt.toDate ? data.finishedAt.toDate() : new Date(data.finishedAt)) : null;
+      
+      // Jika sudah selesai, cek apakah telat selesainya
+      if (data.status === "Selesai" && deadlineDate && finishedDate) {
+          if (finishedDate > deadlineDate) {
+              note = "Terlambat Selesai";
+          } else {
+              note = "Tepat Waktu";
+          }
+      } 
+      // Jika belum selesai dan deadline sudah lewat
+      else if (data.status !== "Selesai" && deadlineDate) {
+          if (new Date() > deadlineDate) {
+              note = "OVERDUE (Terlambat)";
+          }
+      }
+
+      const row = worksheet.addRow({
+        no: index++,
+        createdAt: formatDateIndo(data.createdAt),
+        assignedTo: assignedNames,
+        desc: data.description || "-",
+        deadline: formatDateIndo(data.deadline),
+        status: data.status || "Proses",
+        finishedAt: formatDateIndo(data.finishedAt),
+        note: note
+      });
+
+      // Highlight warna merah jika Overdue
+      if (note.includes("Terlambat") || note.includes("OVERDUE")) {
+          row.getCell("note").font = { color: { argb: "FFFF0000" }, bold: true }; // Merah
+          row.getCell("deadline").font = { color: { argb: "FFFF0000" } };
+      }
+    });
+
+    // STREAM DOWNLOAD
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=Laporan_Tugas_${idperusahaan}.xlsx`
+    );
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (e) {
+    console.error("Export Tugas error:", e);
+    res.status(500).send("Gagal download excel");
+  }
+});
+
+
 
 module.exports = router;
