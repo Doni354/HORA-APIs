@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Super Admin Panel - HORA</title>
+    <title>Super Admin Panel - Vorce</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -16,6 +16,19 @@
         ::-webkit-scrollbar-track { background: #f1f1f1; }
         ::-webkit-scrollbar-thumb { background: #c7c7c7; border-radius: 3px; }
         ::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+        
+        /* Preview Frame Style */
+        .preview-content {
+            all: initial; /* Reset CSS inheriting */
+            background: white;
+            font-family: sans-serif;
+            display: block;
+            padding: 20px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            height: 100%;
+            overflow-y: auto;
+        }
     </style>
 </head>
 <body class="bg-gray-50 text-gray-800 min-h-screen flex flex-col">
@@ -24,9 +37,9 @@
     <div id="login-screen" class="fixed inset-0 z-[60] flex items-center justify-center bg-gray-900 bg-opacity-95 hidden">
         <div class="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-sm text-center transform transition-all scale-100">
             <div class="w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center mx-auto mb-6">
-                <i class="fa-solid fa-user-shield text-3xl text-indigo-600"></i>
+                <img src="./Vorce_Logo.svg" alt="" srcset="">
             </div>
-            <h2 class="text-2xl font-bold mb-2 text-gray-900">Admin Access</h2>
+            <h2 class="text-2xl font-bold mb-2 text-gray-900">Vorce Admin</h2>
             <p class="text-sm text-gray-500 mb-8">Silakan login untuk mengelola resource.</p>
             <button onclick="App.auth.login()" class="w-full bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 hover:border-gray-300 font-medium py-3 px-4 rounded-xl flex items-center justify-center gap-3 transition-all shadow-sm">
                 <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" class="w-5 h-5" alt="Google">
@@ -43,10 +56,10 @@
             <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                 <div class="flex justify-between h-16">
                     <div class="flex items-center gap-3">
-                        <div class="bg-indigo-600 text-white w-8 h-8 flex items-center justify-center rounded-lg shadow-sm">
-                            <i class="fa-solid fa-cube text-sm"></i>
-                        </div>
-                        <span class="font-bold text-lg tracking-tight text-gray-900">HORA <span class="text-indigo-600">OmniControl</span></span>
+                        <!-- LOGO UPDATED -->
+                        <span class="font-bold text-lg tracking-tight text-gray-900">
+                            <img src="./Vorce_LogoWithNameBlack.svg" alt="Vorce" class="h-8" />
+                        </span>
                     </div>
                     <div class="flex items-center gap-4">
                         <div class="text-right hidden sm:block leading-tight">
@@ -182,10 +195,10 @@
         </main>
     </div>
 
-    <!-- MODAL EDIT -->
+    <!-- MODAL EDIT RESOURCE -->
     <div id="modal-edit" class="fixed inset-0 z-50 hidden overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
         <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
-            <div class="fixed inset-0 bg-gray-900 bg-opacity-75 transition-opacity backdrop-blur-sm" onclick="App.ui.closeModal()"></div>
+            <div class="fixed inset-0 bg-gray-900 bg-opacity-75 transition-opacity backdrop-blur-sm" onclick="App.ui.closeModal('modal-edit')"></div>
             <div class="inline-block align-bottom bg-white rounded-2xl text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg w-full">
                 <div class="bg-white px-4 pt-5 pb-4 sm:p-6">
                     <div class="flex justify-between items-start mb-4">
@@ -193,7 +206,7 @@
                             <h3 class="text-lg font-bold text-gray-900" id="modal-title">Edit Resource</h3>
                             <p class="text-xs text-gray-500" id="modal-subtitle">ID: -</p>
                         </div>
-                        <button onclick="App.ui.closeModal()" class="text-gray-400 hover:text-gray-600"><i class="fa-solid fa-xmark text-xl"></i></button>
+                        <button onclick="App.ui.closeModal('modal-edit')" class="text-gray-400 hover:text-gray-600"><i class="fa-solid fa-xmark text-xl"></i></button>
                     </div>
                     
                     <input type="hidden" id="edit-id">
@@ -241,7 +254,79 @@
                 </div>
                 <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse gap-2">
                     <button type="button" onclick="App.company.save()" class="w-full inline-flex justify-center rounded-lg border border-transparent shadow-sm px-4 py-2 bg-indigo-600 text-base font-medium text-white hover:bg-indigo-700 focus:outline-none sm:w-auto sm:text-sm">Simpan</button>
-                    <button type="button" onclick="App.ui.closeModal()" class="mt-2 w-full inline-flex justify-center rounded-lg border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:w-auto sm:text-sm">Batal</button>
+                    <button type="button" onclick="App.ui.closeModal('modal-edit')" class="mt-2 w-full inline-flex justify-center rounded-lg border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:w-auto sm:text-sm">Batal</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL SEND EMAIL (NEW) -->
+    <div id="modal-email" class="fixed inset-0 z-50 hidden overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+        <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+            <div class="fixed inset-0 bg-gray-900 bg-opacity-75 transition-opacity backdrop-blur-sm" onclick="App.ui.closeModal('modal-email')"></div>
+            <div class="inline-block align-bottom bg-white rounded-2xl text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-4xl w-full h-[80vh] flex flex-col">
+                
+                <!-- Header -->
+                <div class="bg-white px-6 py-4 border-b border-gray-100 flex justify-between items-center">
+                    <div>
+                        <h3 class="text-lg font-bold text-gray-900"><i class="fa-regular fa-paper-plane text-indigo-600 mr-2"></i>Kirim Email Perusahaan</h3>
+                        <p class="text-xs text-gray-500" id="email-target-info">To: -</p>
+                    </div>
+                    <button onclick="App.ui.closeModal('modal-email')" class="text-gray-400 hover:text-gray-600"><i class="fa-solid fa-xmark text-xl"></i></button>
+                </div>
+
+                <div class="flex flex-1 overflow-hidden">
+                    <!-- Config Panel (Left) -->
+                    <div class="w-1/3 bg-gray-50 p-6 border-r border-gray-100 overflow-y-auto">
+                        <input type="hidden" id="email-company-id">
+                        <input type="hidden" id="email-target-address">
+                        <input type="hidden" id="email-owner-name">
+                        <input type="hidden" id="email-company-name">
+
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Template</label>
+                                <select id="email-template" onchange="App.email.updatePreview()" class="block w-full border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm p-2.5 border">
+                                    <option value="billing">Tagihan / Invoice</option>
+                                    <option value="upgrade">Upgrade Berhasil</option>
+                                    <option value="warning">Peringatan Kuota</option>
+                                    <option value="info">Info Umum</option>
+                                    <option value="custom">Custom (Manual)</option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Subject</label>
+                                <input type="text" id="email-subject" onkeyup="App.email.updatePreview()" class="block w-full border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm p-2.5 border" placeholder="Judul Email">
+                            </div>
+
+                            <!-- Custom Message Area (Shown for some templates) -->
+                            <div>
+                                <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Pesan / Nominal</label>
+                                <textarea id="email-message" onkeyup="App.email.updatePreview()" rows="6" class="block w-full border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm p-2.5 border" placeholder="Isi pesan tambahan atau nominal tagihan..."></textarea>
+                                <p class="text-[10px] text-gray-400 mt-1">Gunakan &lt;br&gt; untuk baris baru di custom message.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Preview Panel (Right) -->
+                    <div class="w-2/3 bg-gray-200 p-6 flex flex-col">
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="text-xs font-bold text-gray-500 uppercase">Live Preview</span>
+                            <span class="text-[10px] bg-white px-2 py-1 rounded border text-gray-400">HTML View</span>
+                        </div>
+                        <div class="flex-1 bg-white rounded-lg shadow-sm overflow-hidden relative">
+                            <iframe id="email-preview-frame" class="w-full h-full border-0"></iframe>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Footer -->
+                <div class="bg-white px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
+                    <button onclick="App.ui.closeModal('modal-email')" class="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50">Batal</button>
+                    <button onclick="App.email.send()" id="btn-send-email" class="px-6 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-200 flex items-center gap-2">
+                        <i class="fa-regular fa-paper-plane"></i> Kirim Email
+                    </button>
                 </div>
             </div>
         </div>
@@ -296,6 +381,101 @@
             }
         };
 
+        // --- EMAIL TEMPLATES ENGINE (MODULAR) ---
+        class EmailTemplates {
+            static getHeader() {
+                return `
+                    <div style="background-color: #f3f4f6; padding: 20px;">
+                        <div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 8px; overflow: hidden; font-family: Arial, sans-serif;">
+                            <div style="background-color: #4f46e5; padding: 20px; text-align: center; padding-left: 60px;">
+                                <img src="./Vorce_LogoWithName.svg" alt="Vorce" srcset=""/>
+                            </div>
+                            <div style="padding: 30px; color: #333;">
+                `;
+            }
+
+            static getFooter() {
+                return `
+                            </div>
+                            <div style="background-color: #f9fafb; padding: 20px; text-align: center; color: #6b7280; font-size: 12px; border-top: 1px solid #e5e7eb;">
+                                <p>&copy; ${new Date().getFullYear()} Vorce. All rights reserved.</p>
+                                <p>Ini adalah email otomatis, mohon tidak membalas email ini.</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            static generate(type, data) {
+                let content = "";
+                let defaultSubject = "Informasi dari Vorce";
+
+                const { companyName, ownerName, message } = data;
+
+                switch (type) {
+                    case 'billing':
+                        defaultSubject = `Tagihan Layanan Vorce - ${companyName}`;
+                        content = `
+                            <h2 style="color: #4f46e5;">Halo Admin ${companyName},</h2>
+                            <p>Berikut adalah informasi tagihan layanan Anda untuk bulan ini.</p>
+                            <div style="background: #eff6ff; border-left: 4px solid #4f46e5; padding: 15px; margin: 20px 0;">
+                                <p style="margin: 0; font-weight: bold; font-size: 18px;">${message || "Rp 0"}</p>
+                                <p style="margin: 5px 0 0; font-size: 12px; color: #666;">Mohon segera melakukan pembayaran.</p>
+                            </div>
+                            <p>Jika Anda sudah melakukan pembayaran, abaikan email ini.</p>
+                        `;
+                        break;
+
+                    case 'upgrade':
+                        defaultSubject = `Selamat! Upgrade Paket Berhasil`;
+                        content = `
+                            <h2 style="color: #10b981;">Upgrade Berhasil!</h2>
+                            <p>Halo <b>${ownerName}</b>,</p>
+                            <p>Paket layanan untuk perusahaan <b>${companyName}</b> telah berhasil diperbarui.</p>
+                            <p>Detail perubahan:</p>
+                            <div style="border: 1px solid #e5e7eb; padding: 15px; border-radius: 6px;">
+                                ${message ? message : "<p>Kapasitas Storage dan Karyawan telah ditingkatkan.</p>"}
+                            </div>
+                            <p>Terima kasih telah mempercayai Vorce.</p>
+                        `;
+                        break;
+
+                    case 'warning':
+                        defaultSubject = `Peringatan: Kuota Hampir Habis`;
+                        content = `
+                            <h2 style="color: #f59e0b;">Perhatian</h2>
+                            <p>Halo Tim ${companyName},</p>
+                            <p>Kami mendeteksi penggunaan resource Anda mendekati batas maksimal.</p>
+                            <p style="background: #fffbeb; padding: 10px; color: #b45309; border-radius: 4px;">
+                                ${message || "Mohon periksa dashboard admin Anda dan lakukan efisiensi berkas."}
+                            </p>
+                            <a href="#" style="display: inline-block; background: #4f46e5; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin-top: 15px;">Cek Dashboard</a>
+                        `;
+                        break;
+
+                    case 'custom':
+                        defaultSubject = "Pesan Penting dari Admin Vorce";
+                        content = `
+                            <h2>Halo ${ownerName},</h2>
+                            <p>${message ? message.replace(/\n/g, '<br>') : "Tidak ada pesan."}</p>
+                        `;
+                        break;
+
+                    default: // Info
+                        defaultSubject = "Informasi Penting";
+                        content = `
+                            <h2>Halo ${companyName},</h2>
+                            <p>${message || "Ada pembaruan informasi terkait akun Anda."}</p>
+                        `;
+                }
+
+                return {
+                    subject: defaultSubject,
+                    html: this.getHeader() + content + this.getFooter()
+                };
+            }
+        }
+
         // --- UI MANAGER ---
         class UIManager {
             constructor() {
@@ -323,45 +503,145 @@
                 document.getElementById(`tab-${tab}`).className = "px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 bg-white text-indigo-600 shadow-sm";
             }
 
-            openModal(data) {
-                document.getElementById('modal-edit').classList.remove('hidden');
-                document.getElementById('modal-title').textContent = data.namaPerusahaan;
-                document.getElementById('modal-subtitle').textContent = `ID: ${data.idCompany}`;
-                document.getElementById('edit-id').value = data.id;
-
-                // Set Inputs
-                const gb = data.maxStorage ? Math.round(data.maxStorage / (1024**3)) : 0;
-                const allowedGB = [0,10,50,100,300];
-                document.getElementById('input-storage').value = allowedGB.includes(gb) ? gb : 0;
+            openModal(modalId, data = null) {
+                document.getElementById(modalId).classList.remove('hidden');
                 
-                const k = data.maxKaryawan || 10;
-                const allowedK = [10,50,100,1000,10000];
-                document.getElementById('input-karyawan').value = allowedK.includes(k) ? k : 10;
+                if (modalId === 'modal-edit' && data) {
+                    document.getElementById('modal-title').textContent = data.namaPerusahaan;
+                    document.getElementById('modal-subtitle').textContent = `ID: ${data.idCompany}`;
+                    document.getElementById('edit-id').value = data.id;
 
-                // Live Stats
-                document.getElementById('modal-used-storage').textContent = Utils.formatBytes(data.usedStorage || 0);
-                document.getElementById('modal-real-emp').textContent = data.totalEmployees || 0;
+                    const gb = data.maxStorage ? Math.round(data.maxStorage / (1024**3)) : 0;
+                    const allowedGB = [0,10,50,100,300];
+                    document.getElementById('input-storage').value = allowedGB.includes(gb) ? gb : 0;
+                    
+                    const k = data.maxKaryawan || 10;
+                    const allowedK = [10,50,100,1000,10000];
+                    document.getElementById('input-karyawan').value = allowedK.includes(k) ? k : 10;
+
+                    document.getElementById('modal-used-storage').textContent = Utils.formatBytes(data.usedStorage || 0);
+                    document.getElementById('modal-real-emp').textContent = data.totalEmployees || 0;
+                }
             }
 
-            closeModal() {
-                document.getElementById('modal-edit').classList.add('hidden');
+            closeModal(modalId) {
+                document.getElementById(modalId).classList.add('hidden');
+            }
+        }
+
+        // --- EMAIL SERVICE (NEW) ---
+        class EmailService {
+            constructor() {
+                this.currentTemplate = null;
             }
 
-            setLoading(btnId, isLoading, originalText = "") {
-                const btn = document.querySelector(btnId);
-                if (!btn) return;
-                if (isLoading) {
-                    btn.dataset.text = btn.innerHTML;
-                    btn.disabled = true;
-                    btn.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin"></i>`;
-                } else {
+            async openModal(companyId) {
+                const company = App.company.data.find(c => c.id === companyId);
+                if (!company) return;
+
+                App.ui.openModal('modal-email');
+
+                // Set Hidden Data
+                document.getElementById('email-company-id').value = companyId;
+                document.getElementById('email-target-address').value = company.createdBy; // Email Owner
+                document.getElementById('email-company-name').value = company.namaPerusahaan;
+                
+                // UI Reset
+                document.getElementById('email-target-info').textContent = `To: ${company.createdBy} (${company.namaPerusahaan})`;
+                document.getElementById('email-template').value = "info";
+                document.getElementById('email-message').value = "";
+                document.getElementById('email-subject').value = "";
+                
+                // Set default/placeholder while loading
+                document.getElementById('email-owner-name').value = "Owner";
+                this.updatePreview();
+
+                // Fetch Real User Name using createdBy email as doc ID
+                try {
+                    const userRef = doc(db, "users", company.createdBy);
+                    const userSnap = await getDoc(userRef);
+                    if (userSnap.exists()) {
+                        const userData = userSnap.data();
+                        const realName = userData.username || "Owner";
+                        document.getElementById('email-owner-name').value = realName;
+                        this.updatePreview(); // Update preview with real name
+                    }
+                } catch (e) {
+                    console.error("Failed to fetch owner name", e);
+                }
+            }
+
+            updatePreview() {
+                const type = document.getElementById('email-template').value;
+                const message = document.getElementById('email-message').value;
+                const companyName = document.getElementById('email-company-name').value;
+                const ownerName = document.getElementById('email-owner-name').value; 
+
+                const data = { companyName, ownerName, message };
+                const generated = EmailTemplates.generate(type, data);
+
+                // Update Subject Input (if empty or matches default of previous template)
+                const subjectInput = document.getElementById('email-subject');
+                if (!subjectInput.value || subjectInput.dataset.auto === "true") {
+                    subjectInput.value = generated.subject;
+                    subjectInput.dataset.auto = "true"; // Mark as auto-generated
+                }
+
+                // Render HTML to Iframe
+                const iframe = document.getElementById('email-preview-frame');
+                const doc = iframe.contentDocument || iframe.contentWindow.document;
+                doc.open();
+                doc.write(generated.html);
+                doc.close();
+
+                this.currentHtml = generated.html; // Store for sending
+            }
+
+            async send() {
+                const targetEmail = document.getElementById('email-target-address').value;
+                const subject = document.getElementById('email-subject').value;
+                const companyId = document.getElementById('email-company-id').value;
+                
+                if (!subject) return App.ui.showToast("Subjek email harus diisi", "error");
+
+                if (!confirm(`Kirim email ke ${targetEmail}?`)) return;
+
+                const btn = document.getElementById('btn-send-email');
+                btn.disabled = true;
+                btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Mengirim...`;
+
+                try {
+                    // Write to 'mail' collection (Trigger Extension)
+                    await addDoc(collection(db, "mail"), {
+                        to: targetEmail,
+                        message: {
+                            subject: subject,
+                            html: this.currentHtml
+                        },
+                        createdAt: serverTimestamp(),
+                        meta: {
+                            triggeredBy: "Vorce Admin Panel",
+                            adminEmail: App.auth.user.email,
+                            targetCompanyId: companyId
+                        }
+                    });
+
+                    // Log Audit
+                    await App.audit.log("SEND_EMAIL", `Sent email '${subject}' to ${targetEmail}`);
+
+                    App.ui.showToast("Email berhasil dijadwalkan!", "success");
+                    App.ui.closeModal('modal-email');
+                } catch (e) {
+                    console.error(e);
+                    App.ui.showToast("Gagal mengirim: " + e.message, "error");
+                } finally {
                     btn.disabled = false;
-                    btn.innerHTML = originalText || btn.dataset.text;
+                    btn.innerHTML = `<i class="fa-regular fa-paper-plane"></i> Kirim Email`;
                 }
             }
         }
 
-        // --- AUDIT SERVICE (NEW) ---
+        // --- AUDIT SERVICE ---
         class AuditService {
             async log(action, details) {
                 try {
@@ -378,7 +658,7 @@
                 const tbody = document.getElementById('audit-table-body');
                 tbody.innerHTML = `<tr><td colspan="4" class="p-4 text-center text-gray-400">Loading...</td></tr>`;
                 try {
-                    const q = query(collection(db, "super_admin_logs"), orderBy("timestamp", "desc")); // limit 50 idealnya
+                    const q = query(collection(db, "super_admin_logs"), orderBy("timestamp", "desc"));
                     const snap = await getDocs(q);
                     tbody.innerHTML = "";
                     if (snap.empty) {
@@ -447,11 +727,13 @@
                     const usedB = c.usedStorage || 0;
                     const pct = maxB > 0 ? (usedB / maxB) * 100 : (usedB > 0 ? 100 : 0);
                     const color = pct > 90 ? 'bg-red-500' : (pct > 70 ? 'bg-amber-500' : 'bg-indigo-500');
+                    const pctDisplay = pct > 100 ? '>100' : pct.toFixed(1);
 
                     const maxEmp = c.maxKaryawan || 10;
                     const curEmp = c.totalEmployees || 0;
                     const empPct = maxEmp > 0 ? (curEmp / maxEmp) * 100 : 0;
                     const empColor = empPct > 90 ? 'bg-red-500' : 'bg-emerald-500';
+                    const empPctDisplay = Math.round(empPct);
 
                     tbody.innerHTML += `
                         <tr class="hover:bg-gray-50 transition-colors group">
@@ -469,8 +751,11 @@
                             <td class="px-6 py-4">
                                 <div class="w-full max-w-xs">
                                     <div class="flex justify-between text-xs mb-1">
-                                        <span class="font-medium text-gray-700">${Utils.formatBytes(usedB)}</span>
-                                        <span class="text-gray-400">/ ${Utils.formatBytes(maxB, 0)}</span>
+                                        <div>
+                                            <span class="font-medium text-gray-700">${Utils.formatBytes(usedB)}</span>
+                                            <span class="text-gray-400">/ ${Utils.formatBytes(maxB, 0)}</span>
+                                        </div>
+                                        <span class="font-bold text-xs ${pct > 90 ? 'text-red-600' : 'text-gray-500'}">${pctDisplay}%</span>
                                     </div>
                                     <div class="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
                                         <div class="${color} h-1.5 rounded-full" style="width: ${Math.min(pct, 100)}%"></div>
@@ -480,16 +765,22 @@
                             <td class="px-6 py-4">
                                 <div class="w-full max-w-xs">
                                     <div class="flex justify-between text-xs mb-1">
-                                        <span class="font-medium text-gray-700">${curEmp} Org</span>
-                                        <span class="text-gray-400">/ ${maxEmp}</span>
+                                        <div>
+                                            <span class="font-medium text-gray-700">${curEmp} Org</span>
+                                            <span class="text-gray-400">/ ${maxEmp}</span>
+                                        </div>
+                                        <span class="font-bold text-xs ${empPct > 90 ? 'text-red-600' : 'text-gray-500'}">${empPctDisplay}%</span>
                                     </div>
                                     <div class="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
                                         <div class="${empColor} h-1.5 rounded-full" style="width: ${Math.min(empPct, 100)}%"></div>
                                     </div>
                                 </div>
                             </td>
-                            <td class="px-6 py-4 text-right">
-                                <button onclick="App.company.edit('${c.id}')" class="text-gray-400 hover:text-indigo-600 transition-colors p-2 rounded-lg hover:bg-indigo-50">
+                            <td class="px-6 py-4 text-right flex justify-end gap-2">
+                                <button onclick="App.email.openModal('${c.id}')" class="text-gray-400 hover:text-indigo-600 transition-colors p-2 rounded-lg hover:bg-indigo-50" title="Kirim Email">
+                                    <i class="fa-regular fa-envelope"></i>
+                                </button>
+                                <button onclick="App.company.edit('${c.id}')" class="text-gray-400 hover:text-indigo-600 transition-colors p-2 rounded-lg hover:bg-indigo-50" title="Edit Resource">
                                     <i class="fa-solid fa-pen-to-square"></i>
                                 </button>
                             </td>
@@ -509,7 +800,7 @@
 
             edit(id) {
                 const item = this.data.find(x => x.id === id);
-                if (item) App.ui.openModal(item);
+                if (item) App.ui.openModal('modal-edit', item);
             }
 
             async save() {
@@ -527,7 +818,7 @@
                     await updateDoc(doc(db, "companies", id), { maxStorage: bytes, maxKaryawan: emp });
                     await App.audit.log("UPDATE_RESOURCE", `Updated ${item.namaPerusahaan}: ${gb}GB, ${emp} Users`);
                     
-                    App.ui.closeModal();
+                    App.ui.closeModal('modal-edit');
                     App.ui.showToast("Data diperbarui", "success");
                     this.loadAll(); // Reload to reflect changes
                 } catch (e) { App.ui.showToast(e.message, "error"); }
@@ -668,7 +959,8 @@
             company: new CompanyService(),
             ui: new UIManager(),
             audit: new AuditService(),
-            admin: new AdminManager()
+            admin: new AdminManager(),
+            email: new EmailService()
         };
 
         // Expose to window for onclick handlers
