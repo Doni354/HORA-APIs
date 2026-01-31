@@ -163,7 +163,7 @@ const uploadFileBerkas = (req, folderName) => {
 };
 
 // ---------------------------------------------------------
-// HELPER: Upload File Berkas to Cloudflare R2
+// HELPER: Upload File Berkas to Cloudflare R2 untuk nanti
 // ---------------------------------------------------------
 const uploadFileBerkasR2 = (req, folderName) => {
   return new Promise((resolve, reject) => {
