@@ -9,7 +9,9 @@ const path = require("path");
 const { Timestamp } = require("firebase-admin/firestore");
 const {uploadFileBerkas,formatFileSize,parseSizeStringToBytes, } = require("../helper/uploadFile");
 const { FieldValue } = require("firebase-admin/firestore"); // Import FieldValue
-
+const { S3Client, DeleteObjectCommand } = require("@aws-sdk/client-s3");
+const { r2 } = require("../config/r2");
+const BUCKET_NAME = "vorce";
 // ---------------------------------------------------------
 // POST /upload - Upload File dengan Cek Kuota Storage
 // ---------------------------------------------------------
@@ -275,24 +277,18 @@ router.get("/total-size", verifyToken, async (req, res) => {
   }
 });
 // ---------------------------------------------------------
-// 3. EDIT NAMA BERKAS (Rename)
+// EDIT NAMA BERKAS (Admin / Pemilik File)
 // ---------------------------------------------------------
 router.put("/:fileId", verifyToken, async (req, res) => {
   try {
     const { fileId } = req.params;
-    const { newFileName } = req.body; // Nama baru (tanpa ekstensi gpp, atau full string)
+    const { newFileName } = req.body;
     const user = req.user;
 
     if (!newFileName) {
-      return res.status(400).json({ message: "Nama berkas baru wajib diisi." });
-    }
-
-    // Security: Hanya Admin yang boleh edit (atau uploader aslinya, opsional)
-    // Di sini kita set Admin only biar aman
-    if (user.role !== "admin") {
-      return res
-        .status(403)
-        .json({ message: "Hanya Admin yang boleh mengedit berkas." });
+      return res.status(400).json({
+        message: "Nama berkas baru wajib diisi.",
+      });
     }
 
     const fileRef = db
@@ -300,29 +296,41 @@ router.put("/:fileId", verifyToken, async (req, res) => {
       .doc(user.idCompany)
       .collection("files")
       .doc(fileId);
-    const fileDoc = await fileRef.get();
 
+    const fileDoc = await fileRef.get();
     if (!fileDoc.exists) {
       return res.status(404).json({ message: "Berkas tidak ditemukan." });
     }
 
-    // Kita hanya update Display Name di Database.
-    // Tidak perlu rename fisik file di Storage (karena mahal resource & url bisa putus)
+    const fileData = fileDoc.data();
+
+    const isAdmin = user.role === "admin";
+    const isOwner = fileData.uploadedBy === user.email;
+
+    if (!isAdmin && !isOwner) {
+      return res.status(403).json({
+        message: "Anda tidak memiliki izin mengedit berkas ini.",
+      });
+    }
+
     await fileRef.update({
       fileName: newFileName,
       updatedAt: Timestamp.now(),
-      updatedBy: user.nama,
+      updatedBy: user.nama || user.email,
     });
 
     await logCompanyActivity(user.idCompany, {
       actorEmail: user.email,
-      actorName: user.nama || "Admin",
+      actorName: user.nama || user.email,
       target: fileId,
       action: "RENAME_FILE",
-      description: `Admin mengubah nama berkas menjadi: ${newFileName}`,
+      description: `Mengubah nama berkas menjadi: ${newFileName}`,
     });
 
-    return res.status(200).json({ message: "Nama berkas berhasil diubah." });
+    return res.status(200).json({
+      message: "Nama berkas berhasil diubah.",
+    });
+
   } catch (e) {
     console.error("Rename File Error:", e);
     return res.status(500).json({ message: "Server Error" });
@@ -330,68 +338,104 @@ router.put("/:fileId", verifyToken, async (req, res) => {
 });
 
 // ---------------------------------------------------------
-// DELETE BERKAS (Mengembalikan Kuota Storage)
+// DELETE BERKAS (Mengembalikan Kuota Storage + R2)
 // ---------------------------------------------------------
 router.delete("/:fileId", verifyToken, async (req, res) => {
   try {
     const { fileId } = req.params;
     const user = req.user;
 
-    // Security: Hanya Admin
-    if (user.role !== "admin") {
-      return res.status(403).json({ message: "Hanya Admin yang boleh menghapus berkas." });
+    if (!user.idCompany) {
+      return res.status(400).json({ message: "ID Company tidak valid." });
     }
 
     const companyRef = db.collection("companies").doc(user.idCompany);
     const fileRef = companyRef.collection("files").doc(fileId);
-    
-    // Gunakan Transaction untuk memastikan konsistensi hapus + update kuota
+
+    let fileData = null;
+
+    // 1️⃣ TRANSACTION DB
     await db.runTransaction(async (transaction) => {
-        const fileDoc = await transaction.get(fileRef);
-        if (!fileDoc.exists) throw new Error("FILE_NOT_FOUND");
-        
-        const data = fileDoc.data();
-        const fileSizeToDelete = data.sizeBytes || 0; // Ambil size bytes
+      const snap = await transaction.get(fileRef);
+      if (!snap.exists) throw new Error("FILE_NOT_FOUND");
 
-        // 1. Delete Metadata
-        transaction.delete(fileRef);
+      fileData = snap.data();
 
-        // 2. Decrement Used Storage
-        // Pakai increment negatif untuk mengurangi
-        transaction.update(companyRef, {
-            usedStorage: FieldValue.increment(-fileSizeToDelete)
-        });
+      const isAdmin = user.role === "admin";
+      const isOwner = fileData.uploadedBy === user.email;
 
-        // 3. Hapus Fisik di Luar Transaksi (atau di sini, tapi promise bucket harus ditunggu)
-        // Kita simpan info path untuk dihapus setelah transaksi sukses
-        // (Tapi dalam firebase function, lebih aman hapus fisik belakangan atau biarkan async)
-        if (data.storagePath) {
-             bucket.file(data.storagePath).delete().catch(err => 
-                console.warn("Gagal hapus fisik:", err.message)
-            );
-        }
+      if (!isAdmin && !isOwner) {
+        throw new Error("FORBIDDEN");
+      }
 
-        // Log Aktivitas (di luar transaksi biasanya, tapi logic kita butuh await)
-        // Kita biarkan log dieksekusi setelah response saja atau disini tidak apa2.
+      transaction.delete(fileRef);
+      transaction.update(companyRef, {
+        usedStorage: FieldValue.increment(-(fileData.sizeBytes || 0)),
+      });
     });
 
+    // 2️⃣ DELETE STORAGE (OUTSIDE TRANSACTION)
+    const deleteTasks = [];
+
+    // ☁️ Cloudflare R2 (PRIMARY)
+    if (fileData?.storagePath) {
+      deleteTasks.push(
+        r2.send(
+          new DeleteObjectCommand({
+            Bucket: BUCKET_NAME,
+            Key: fileData.storagePath,
+          })
+        )
+      );
+    }
+
+    // 🔥 Firebase Storage (LEGACY - OPTIONAL)
+    if (fileData?.legacy === true && fileData?.storagePath) {
+      deleteTasks.push(
+        bucket.file(fileData.storagePath).delete()
+      );
+    }
+
+    const results = await Promise.allSettled(deleteTasks);
+
+    results.forEach(r => {
+      if (r.status === "rejected") {
+        console.warn("Gagal hapus storage:", r.reason?.message);
+      }
+    });
+
+    // 3️⃣ LOG
     await logCompanyActivity(user.idCompany, {
       actorEmail: user.email,
-      actorName: user.nama || "Admin",
+      actorName: user.nama || user.email,
       target: fileId,
       action: "DELETE_FILE",
-      description: `Admin menghapus berkas.`,
+      description:
+        user.role === "admin"
+          ? "Admin menghapus berkas."
+          : "Pemilik berkas menghapus berkas.",
     });
 
-    return res.status(200).json({ message: "Berkas berhasil dihapus & kuota dikembalikan." });
+    return res.status(200).json({
+      message: "Berkas berhasil dihapus.",
+      storageResult: results.map(r => r.status),
+    });
 
   } catch (e) {
     if (e.message === "FILE_NOT_FOUND") {
-        return res.status(404).json({ message: "Berkas tidak ditemukan." });
+      return res.status(404).json({ message: "Berkas tidak ditemukan." });
     }
+    if (e.message === "FORBIDDEN") {
+      return res.status(403).json({
+        message: "Anda tidak memiliki izin menghapus berkas ini.",
+      });
+    }
+
     console.error("Delete Error:", e);
     return res.status(500).json({ message: "Server Error" });
   }
 });
+
+
 
 module.exports = router;

@@ -100,7 +100,7 @@ const uploadFile = (req, folderName, fileNameFunc) => {
 // ---------------------------------------------------------
 // HELPER: Upload File Berkas (Returns Detail Metadata)
 // ---------------------------------------------------------
-const uploadFileBerkas = (req, folderName) => {
+const uploadFileBerkasCS = (req, folderName) => {
   return new Promise((resolve, reject) => {
     const busboy = Busboy({ headers: req.headers });
     let fileBuffer = null;
@@ -165,7 +165,7 @@ const uploadFileBerkas = (req, folderName) => {
 // ---------------------------------------------------------
 // HELPER: Upload File Berkas to Cloudflare R2 untuk nanti
 // ---------------------------------------------------------
-const uploadFileBerkasR2 = (req, folderName) => {
+const uploadFileBerkas = (req, folderName) => {
   return new Promise((resolve, reject) => {
     const busboy = Busboy({ headers: req.headers });
     let fileBuffer = null;
@@ -200,8 +200,8 @@ const uploadFileBerkasR2 = (req, folderName) => {
           })
         );
 
-        const publicUrl = `https://609723b5d7cc16b02d6454eebea06c5a.r2.cloudflarestorage.com/${BUCKET_NAME}/${objectKey}`;
-
+        const publicUrl = `https://cdn.vorce.id/${objectKey}`;
+        
         const sizeBytes = fileBuffer.length;
 
         resolve({
