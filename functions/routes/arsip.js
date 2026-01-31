@@ -1131,6 +1131,85 @@ router.get("/export/tugas", async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------
+// 8. UPDATE RESOURCE LIMITS (API PAYMENT GATEWAY) UNTUK NANTI
+// ---------------------------------------------------------
+// Endpoint ini siap menerima Webhook dari Payment Gateway
+router.post("/upgrade-resource", async (req, res) => {
+  try {
+    // A. Security Check (API Key)
+    // Ambil dari Header (x-api-key) atau Body (secretKey)
+    const apiKey = req.headers['x-api-key'] || req.body.secretKey;
+    const SYSTEM_KEY = process.env.INTERNAL_API_KEY || "vorce-secret-key-123"; // Ganti di .env production
+
+    if (apiKey !== SYSTEM_KEY) {
+        return res.status(403).json({ message: "Forbidden: Invalid API Key" });
+    }
+
+    // B. Parse Data
+    const { idCompany, maxStorage, maxKaryawan } = req.body;
+
+    if (!idCompany) return res.status(400).json({ message: "ID Company required" });
+
+    const updates = {};
+    if (maxStorage !== undefined) updates.maxStorage = parseInt(maxStorage); // Pastikan angka (Bytes)
+    if (maxKaryawan !== undefined) updates.maxKaryawan = parseInt(maxKaryawan); // Pastikan angka
+
+    if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ message: "No data to update" });
+    }
+
+    // C. Update Firestore
+    await db.collection("companies").doc(idCompany).update(updates);
+
+    // D. Log System Activity
+    await logCompanyActivity(idCompany, {
+        actorEmail: "payment-gateway@vorce.io",
+        actorName: "System Payment",
+        target: idCompany,
+        action: "UPGRADE_RESOURCE",
+        description: `Upgrade Resource via API. Storage: ${maxStorage || '-'}, Karyawan: ${maxKaryawan || '-'}`
+    });
+
+    // E. Kirim Notifikasi Email ke Owner
+    // Ambil email owner dari data company
+    const compDoc = await db.collection("companies").doc(idCompany).get();
+    if (compDoc.exists) {
+        const compData = compDoc.data();
+        const ownerEmail = compData.createdBy; 
+        
+        if (ownerEmail) {
+             // Tulis ke collection 'mail' untuk trigger extension
+             await db.collection("mail").add({
+                to: ownerEmail,
+                message: {
+                  subject: `Upgrade Paket Berhasil - ${compData.namaPerusahaan}`,
+                  html: `
+                    <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+                        <h2 style="color: #4f46e5;">Upgrade Berhasil!</h2>
+                        <p>Halo Admin <b>${compData.namaPerusahaan}</b>,</p>
+                        <p>Paket layanan Anda telah berhasil diperbarui oleh sistem kami.</p>
+                        <div style="background: #f3f4f6; padding: 15px; border-radius: 8px; margin: 15px 0;">
+                            <ul style="margin: 0; padding-left: 20px;">
+                                <li><b>Max Storage:</b> ${maxStorage ? (maxStorage/1024/1024).toFixed(0) + ' MB' : 'Tidak Berubah'}</li>
+                                <li><b>Max Karyawan:</b> ${maxKaryawan ? maxKaryawan + ' Orang' : 'Tidak Berubah'}</li>
+                            </ul>
+                        </div>
+                        <p>Selamat menikmati layanan Vorce dengan kapasitas lebih besar.</p>
+                    </div>
+                  `
+                }
+             });
+        }
+    }
+
+    return res.status(200).json({ message: "Success updating resources", data: updates });
+
+  } catch (e) {
+    console.error("Upgrade API Error:", e);
+    return res.status(500).json({ message: "Server Error" });
+  }
+});
 
 
 module.exports = router;
