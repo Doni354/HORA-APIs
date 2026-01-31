@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Super Admin Panel - HORA</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .toast-enter { animation: slideIn 0.3s ease-out forwards; }
+        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #c7c7c7; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800 min-h-screen flex flex-col">
+
+    <!-- LOGIN OVERLAY -->
+    <div id="login-screen" class="fixed inset-0 z-[60] flex items-center justify-center bg-gray-900 bg-opacity-95 hidden">
+        <div class="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-sm text-center transform transition-all scale-100">
+            <div class="w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center mx-auto mb-6">
+                <i class="fa-solid fa-user-shield text-3xl text-indigo-600"></i>
+            </div>
+            <h2 class="text-2xl font-bold mb-2 text-gray-900">Admin Access</h2>
+            <p class="text-sm text-gray-500 mb-8">Silakan login untuk mengelola resource.</p>
+            <button onclick="App.auth.login()" class="w-full bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 hover:border-gray-300 font-medium py-3 px-4 rounded-xl flex items-center justify-center gap-3 transition-all shadow-sm">
+                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" class="w-5 h-5" alt="Google">
+                <span>Masuk dengan Google</span>
+            </button>
+            <p id="login-error" class="text-red-500 text-xs mt-4 hidden bg-red-50 p-2 rounded border border-red-100"></p>
+        </div>
+    </div>
+
+    <!-- MAIN APP -->
+    <div id="app-content" class="hidden flex flex-col min-h-screen">
+        <!-- Navbar -->
+        <nav class="bg-white border-b border-gray-200 sticky top-0 z-30 shadow-sm/50 backdrop-blur-md bg-opacity-90">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div class="flex justify-between h-16">
+                    <div class="flex items-center gap-3">
+                        <div class="bg-indigo-600 text-white w-8 h-8 flex items-center justify-center rounded-lg shadow-sm">
+                            <i class="fa-solid fa-cube text-sm"></i>
+                        </div>
+                        <span class="font-bold text-lg tracking-tight text-gray-900">HORA <span class="text-indigo-600">OmniControl</span></span>
+                    </div>
+                    <div class="flex items-center gap-4">
+                        <div class="text-right hidden sm:block leading-tight">
+                            <div id="admin-name" class="text-sm font-semibold text-gray-900">Admin</div>
+                            <div id="admin-email" class="text-xs text-gray-500">...</div>
+                        </div>
+                        <button onclick="App.auth.logout()" class="text-gray-400 hover:text-red-600 hover:bg-red-50 transition-all p-2 rounded-full" title="Keluar">
+                            <i class="fa-solid fa-power-off"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Content -->
+        <main class="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
+            
+            <!-- Navigation Tabs -->
+            <div class="flex space-x-1 bg-gray-200/50 p-1 rounded-xl mb-8 w-fit">
+                <button onclick="App.ui.switchTab('companies')" id="tab-companies" class="px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 bg-white text-indigo-600 shadow-sm">
+                    <i class="fa-solid fa-building"></i> Perusahaan
+                </button>
+                <button onclick="App.ui.switchTab('logs')" id="tab-logs" class="px-4 py-2 rounded-lg text-sm font-medium text-gray-500 hover:text-gray-700 transition-all flex items-center gap-2">
+                    <i class="fa-solid fa-clock-rotate-left"></i> Audit Log
+                </button>
+                <button onclick="App.ui.switchTab('admins')" id="tab-admins" class="px-4 py-2 rounded-lg text-sm font-medium text-gray-500 hover:text-gray-700 transition-all flex items-center gap-2">
+                    <i class="fa-solid fa-users-gear"></i> Admins
+                </button>
+            </div>
+
+            <!-- VIEW: COMPANIES -->
+            <div id="view-companies" class="space-y-6 animate-fade-in">
+                <!-- Toolbar: Search & Refresh -->
+                <div class="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                    <div class="relative w-full sm:w-96">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <i class="fa-solid fa-magnifying-glass text-gray-400"></i>
+                        </div>
+                        <input type="text" id="search-company" onkeyup="App.company.handleSearch(this.value)" 
+                            class="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg leading-5 bg-gray-50 placeholder-gray-400 focus:outline-none focus:bg-white focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm transition-colors" 
+                            placeholder="Cari Nama PT atau ID Company...">
+                    </div>
+                    <div class="flex gap-3 w-full sm:w-auto">
+                        <button onclick="App.company.loadAll()" class="flex-1 sm:flex-none justify-center inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50 focus:outline-none transition-all gap-2">
+                            <i class="fa-solid fa-rotate-right" id="icon-refresh"></i> Refresh Data
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Stats Overview -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="bg-indigo-50/50 p-4 rounded-xl border border-indigo-100 flex items-center gap-4">
+                        <div class="p-3 bg-indigo-100 text-indigo-600 rounded-lg"><i class="fa-solid fa-city"></i></div>
+                        <div><p class="text-xs text-indigo-600 font-bold uppercase">Total PT</p><p class="text-xl font-bold text-gray-800" id="stat-count">0</p></div>
+                    </div>
+                    <div class="bg-blue-50/50 p-4 rounded-xl border border-blue-100 flex items-center gap-4">
+                        <div class="p-3 bg-blue-100 text-blue-600 rounded-lg"><i class="fa-solid fa-server"></i></div>
+                        <div><p class="text-xs text-blue-600 font-bold uppercase">Total Storage</p><p class="text-xl font-bold text-gray-800" id="stat-storage">0 GB</p></div>
+                    </div>
+                    <div class="bg-green-50/50 p-4 rounded-xl border border-green-100 flex items-center gap-4">
+                        <div class="p-3 bg-green-100 text-green-600 rounded-lg"><i class="fa-solid fa-users"></i></div>
+                        <div><p class="text-xs text-green-600 font-bold uppercase">Total Karyawan</p><p class="text-xl font-bold text-gray-800" id="stat-employees">-</p></div>
+                    </div>
+                </div>
+
+                <!-- Main Table -->
+                <div class="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50/50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Perusahaan</th>
+                                    <th class="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider w-1/3">Storage Usage</th>
+                                    <th class="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Karyawan</th>
+                                    <th class="px-6 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Aksi</th>
+                                </tr>
+                            </thead>
+                            <tbody id="company-table-body" class="bg-white divide-y divide-gray-200">
+                                <!-- JS Injection -->
+                            </tbody>
+                        </table>
+                    </div>
+                    <div id="table-empty" class="hidden p-8 text-center text-gray-500">Tidak ada data ditemukan.</div>
+                </div>
+            </div>
+
+            <!-- VIEW: AUDIT LOGS -->
+            <div id="view-logs" class="hidden space-y-6 animate-fade-in">
+                <div class="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                    <div class="px-6 py-4 border-b border-gray-200 bg-gray-50/50 flex justify-between items-center">
+                        <h3 class="text-base font-semibold text-gray-900">Riwayat Aktivitas Admin</h3>
+                        <button onclick="App.audit.loadLogs()" class="text-xs text-indigo-600 hover:underline">Refresh Log</button>
+                    </div>
+                    <div class="overflow-x-auto max-h-[600px] overflow-y-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50 sticky top-0">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Waktu</th>
+                                    <th class="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Admin</th>
+                                    <th class="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Aksi</th>
+                                    <th class="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Detail</th>
+                                </tr>
+                            </thead>
+                            <tbody id="audit-table-body" class="bg-white divide-y divide-gray-200 text-sm">
+                                <!-- JS Injection -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VIEW: ADMINS -->
+            <div id="view-admins" class="hidden space-y-6 animate-fade-in">
+                <div class="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+                    <h3 class="text-lg font-medium text-gray-900 mb-1">Tambah Super Admin</h3>
+                    <div class="flex rounded-md shadow-sm max-w-md mt-4">
+                        <input type="email" id="new-admin-email" class="flex-1 block w-full rounded-l-lg border-gray-300 p-2.5 border text-sm focus:ring-indigo-500 focus:border-indigo-500" placeholder="email@google.com">
+                        <button onclick="App.admin.add()" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-r-lg text-white bg-indigo-600 hover:bg-indigo-700">
+                            <i class="fa-solid fa-plus mr-2"></i> Tambah
+                        </button>
+                    </div>
+                </div>
+                <div class="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                    <div class="px-6 py-4 bg-gray-50/50 border-b border-gray-200">
+                        <h3 class="text-base font-semibold text-gray-900">Daftar Super Admin</h3>
+                    </div>
+                    <ul id="admin-list" class="divide-y divide-gray-200">
+                        <!-- JS Injection -->
+                    </ul>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- MODAL EDIT -->
+    <div id="modal-edit" class="fixed inset-0 z-50 hidden overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+        <div class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+            <div class="fixed inset-0 bg-gray-900 bg-opacity-75 transition-opacity backdrop-blur-sm" onclick="App.ui.closeModal()"></div>
+            <div class="inline-block align-bottom bg-white rounded-2xl text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg w-full">
+                <div class="bg-white px-4 pt-5 pb-4 sm:p-6">
+                    <div class="flex justify-between items-start mb-4">
+                        <div>
+                            <h3 class="text-lg font-bold text-gray-900" id="modal-title">Edit Resource</h3>
+                            <p class="text-xs text-gray-500" id="modal-subtitle">ID: -</p>
+                        </div>
+                        <button onclick="App.ui.closeModal()" class="text-gray-400 hover:text-gray-600"><i class="fa-solid fa-xmark text-xl"></i></button>
+                    </div>
+                    
+                    <input type="hidden" id="edit-id">
+                    
+                    <!-- Live Stats -->
+                    <div class="bg-gray-50 rounded-xl p-4 mb-6 border border-gray-100 grid grid-cols-2 gap-4">
+                        <div>
+                            <span class="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Used Storage</span>
+                            <div class="flex items-center gap-2">
+                                <span id="modal-used-storage" class="text-sm font-bold text-gray-800">0 B</span>
+                                <button onclick="App.company.syncStorage()" class="text-xs text-indigo-600 hover:bg-indigo-50 p-1 rounded" title="Hitung Ulang File"><i class="fa-solid fa-rotate"></i></button>
+                            </div>
+                        </div>
+                        <div>
+                            <span class="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Real Employees</span>
+                            <div class="flex items-center gap-2">
+                                <span id="modal-real-emp" class="text-sm font-bold text-gray-800">0</span>
+                                <button onclick="App.company.syncEmployees()" class="text-xs text-indigo-600 hover:bg-indigo-50 p-1 rounded" title="Hitung Ulang User"><i class="fa-solid fa-rotate"></i></button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Limit Storage</label>
+                            <select id="input-storage" class="block w-full border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm p-2.5 border">
+                                <option value="0">0 GB (Non-Aktif)</option>
+                                <option value="10">10 GB (Starter)</option>
+                                <option value="50">50 GB (Basic)</option>
+                                <option value="100">100 GB (Pro)</option>
+                                <option value="300">300 GB (Enterprise)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Limit Karyawan</label>
+                            <select id="input-karyawan" class="block w-full border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm p-2.5 border">
+                                <option value="10">10 Orang</option>
+                                <option value="50">50 Orang</option>
+                                <option value="100">100 Orang</option>
+                                <option value="1000">1.000 Orang</option>
+                                <option value="10000">Unlimited</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse gap-2">
+                    <button type="button" onclick="App.company.save()" class="w-full inline-flex justify-center rounded-lg border border-transparent shadow-sm px-4 py-2 bg-indigo-600 text-base font-medium text-white hover:bg-indigo-700 focus:outline-none sm:w-auto sm:text-sm">Simpan</button>
+                    <button type="button" onclick="App.ui.closeModal()" class="mt-2 w-full inline-flex justify-center rounded-lg border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:w-auto sm:text-sm">Batal</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- TOAST CONTAINER -->
+    <div id="toast-container" class="fixed bottom-5 right-5 z-[70] flex flex-col gap-2"></div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.2.0/firebase-app.js";
+        import { getAuth, signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.2.0/firebase-auth.js";
+        import { getFirestore, collection, getDocs, doc, updateDoc, setDoc, deleteDoc, getDoc, query, where, orderBy, getCountFromServer, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.2.0/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyDcc3oP_lGYg9ikBn0mq--wdH27aQ5LFlc",
+            authDomain: "hora-7394b.firebaseapp.com",
+            projectId: "hora-7394b",
+            storageBucket: "hora-7394b.firebasestorage.app",
+            messagingSenderId: "544676101248",
+            appId: "1:544676101248:web:708c651f6c3d20a5b1ba65",
+            measurementId: "G-F9K8JMYEZN"
+        };
+
+        const ROOT_ADMIN = "doni.smpn1@gmail.com";
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const provider = new GoogleAuthProvider();
+
+        // --- UTILITIES ---
+        const Utils = {
+            formatBytes: (bytes, decimals = 2) => {
+                if (!+bytes) return '0 B';
+                const k = 1024, sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+                const i = Math.floor(Math.log(bytes) / Math.log(k));
+                return `${parseFloat((bytes / Math.pow(k, i)).toFixed(decimals))} ${sizes[i]}`;
+            },
+            parseBytes: (str) => {
+                if (typeof str === 'number') return str;
+                if (!str) return 0;
+                const parts = str.split(' ');
+                if (parts.length < 2) return Number(str) || 0;
+                const val = parseFloat(parts[0]), unit = parts[1].toUpperCase();
+                const k = 1024;
+                switch (unit) {
+                    case 'KB': return val * k; case 'MB': return val * k**2; case 'GB': return val * k**3; default: return val;
+                }
+            },
+            formatDate: (timestamp) => {
+                if (!timestamp) return '-';
+                return new Date(timestamp.seconds * 1000).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' });
+            }
+        };
+
+        // --- UI MANAGER ---
+        class UIManager {
+            constructor() {
+                this.toastContainer = document.getElementById('toast-container');
+            }
+
+            showToast(msg, type = 'info') {
+                const el = document.createElement('div');
+                const colors = { success: "bg-emerald-600", error: "bg-rose-600", info: "bg-gray-800" };
+                const icons = { success: "fa-check", error: "fa-xmark", info: "fa-info" };
+                
+                el.className = `${colors[type]} text-white px-4 py-3 rounded-xl shadow-lg text-sm font-medium toast-enter flex items-center gap-3 min-w-[300px] z-50`;
+                el.innerHTML = `<i class="fa-solid ${icons[type]}"></i> ${msg}`;
+                this.toastContainer.appendChild(el);
+                setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, 4000);
+            }
+
+            switchTab(tab) {
+                ['companies', 'logs', 'admins'].forEach(t => {
+                    document.getElementById(`view-${t}`).classList.add('hidden');
+                    const btn = document.getElementById(`tab-${t}`);
+                    btn.className = "px-4 py-2 rounded-lg text-sm font-medium text-gray-500 hover:text-gray-700 transition-all flex items-center gap-2";
+                });
+                document.getElementById(`view-${tab}`).classList.remove('hidden');
+                document.getElementById(`tab-${tab}`).className = "px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 bg-white text-indigo-600 shadow-sm";
+            }
+
+            openModal(data) {
+                document.getElementById('modal-edit').classList.remove('hidden');
+                document.getElementById('modal-title').textContent = data.namaPerusahaan;
+                document.getElementById('modal-subtitle').textContent = `ID: ${data.idCompany}`;
+                document.getElementById('edit-id').value = data.id;
+
+                // Set Inputs
+                const gb = data.maxStorage ? Math.round(data.maxStorage / (1024**3)) : 0;
+                const allowedGB = [0,10,50,100,300];
+                document.getElementById('input-storage').value = allowedGB.includes(gb) ? gb : 0;
+                
+                const k = data.maxKaryawan || 10;
+                const allowedK = [10,50,100,1000,10000];
+                document.getElementById('input-karyawan').value = allowedK.includes(k) ? k : 10;
+
+                // Live Stats
+                document.getElementById('modal-used-storage').textContent = Utils.formatBytes(data.usedStorage || 0);
+                document.getElementById('modal-real-emp').textContent = data.totalEmployees || 0;
+            }
+
+            closeModal() {
+                document.getElementById('modal-edit').classList.add('hidden');
+            }
+
+            setLoading(btnId, isLoading, originalText = "") {
+                const btn = document.querySelector(btnId);
+                if (!btn) return;
+                if (isLoading) {
+                    btn.dataset.text = btn.innerHTML;
+                    btn.disabled = true;
+                    btn.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin"></i>`;
+                } else {
+                    btn.disabled = false;
+                    btn.innerHTML = originalText || btn.dataset.text;
+                }
+            }
+        }
+
+        // --- AUDIT SERVICE (NEW) ---
+        class AuditService {
+            async log(action, details) {
+                try {
+                    await addDoc(collection(db, "super_admin_logs"), {
+                        actor: App.auth.user.email,
+                        action: action,
+                        details: details,
+                        timestamp: serverTimestamp()
+                    });
+                } catch (e) { console.error("Log error", e); }
+            }
+
+            async loadLogs() {
+                const tbody = document.getElementById('audit-table-body');
+                tbody.innerHTML = `<tr><td colspan="4" class="p-4 text-center text-gray-400">Loading...</td></tr>`;
+                try {
+                    const q = query(collection(db, "super_admin_logs"), orderBy("timestamp", "desc")); // limit 50 idealnya
+                    const snap = await getDocs(q);
+                    tbody.innerHTML = "";
+                    if (snap.empty) {
+                        tbody.innerHTML = `<tr><td colspan="4" class="p-4 text-center text-gray-400">Belum ada aktivitas.</td></tr>`;
+                        return;
+                    }
+                    snap.forEach(doc => {
+                        const d = doc.data();
+                        tbody.innerHTML += `
+                            <tr class="hover:bg-gray-50 border-b border-gray-100">
+                                <td class="px-6 py-3 whitespace-nowrap text-gray-500">${Utils.formatDate(d.timestamp)}</td>
+                                <td class="px-6 py-3 font-medium text-gray-900">${d.actor}</td>
+                                <td class="px-6 py-3"><span class="px-2 py-1 bg-gray-100 rounded text-xs font-bold text-gray-600">${d.action}</span></td>
+                                <td class="px-6 py-3 text-gray-600">${d.details}</td>
+                            </tr>
+                        `;
+                    });
+                } catch (e) { console.error(e); tbody.innerHTML = `<tr><td colspan="4" class="p-4 text-center text-red-400">Error loading logs</td></tr>`; }
+            }
+        }
+
+        // --- COMPANY SERVICE ---
+        class CompanyService {
+            constructor() {
+                this.data = [];
+            }
+
+            async loadAll() {
+                const icon = document.getElementById('icon-refresh');
+                icon.classList.add('fa-spin');
+                
+                try {
+                    const q = query(collection(db, "companies"), orderBy("createdAt", "desc"));
+                    const snap = await getDocs(q);
+                    this.data = [];
+                    let totalStorage = 0, totalEmp = 0;
+
+                    snap.forEach(doc => {
+                        const d = doc.data();
+                        this.data.push({ id: doc.id, ...d });
+                        totalStorage += (d.usedStorage || 0);
+                        if(d.totalEmployees) totalEmp += d.totalEmployees;
+                    });
+
+                    // Update Global Stats
+                    document.getElementById('stat-count').textContent = this.data.length;
+                    document.getElementById('stat-storage').textContent = Utils.formatBytes(totalStorage);
+                    document.getElementById('stat-employees').textContent = totalEmp;
+
+                    this.renderTable(this.data);
+                    App.ui.showToast("Data berhasil disinkronisasi", "success");
+                } catch (e) {
+                    App.ui.showToast("Gagal memuat data: " + e.message, "error");
+                } finally {
+                    icon.classList.remove('fa-spin');
+                }
+            }
+
+            renderTable(list) {
+                const tbody = document.getElementById('company-table-body');
+                tbody.innerHTML = "";
+                document.getElementById('table-empty').classList.toggle('hidden', list.length > 0);
+
+                list.forEach(c => {
+                    const maxB = c.maxStorage || 0;
+                    const usedB = c.usedStorage || 0;
+                    const pct = maxB > 0 ? (usedB / maxB) * 100 : (usedB > 0 ? 100 : 0);
+                    const color = pct > 90 ? 'bg-red-500' : (pct > 70 ? 'bg-amber-500' : 'bg-indigo-500');
+
+                    const maxEmp = c.maxKaryawan || 10;
+                    const curEmp = c.totalEmployees || 0;
+                    const empPct = maxEmp > 0 ? (curEmp / maxEmp) * 100 : 0;
+                    const empColor = empPct > 90 ? 'bg-red-500' : 'bg-emerald-500';
+
+                    tbody.innerHTML += `
+                        <tr class="hover:bg-gray-50 transition-colors group">
+                            <td class="px-6 py-4">
+                                <div class="flex items-center">
+                                    <div class="h-10 w-10 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-lg border border-indigo-100">
+                                        ${c.namaPerusahaan?.charAt(0).toUpperCase() || '?'}
+                                    </div>
+                                    <div class="ml-3">
+                                        <div class="text-sm font-semibold text-gray-900">${c.namaPerusahaan || 'Tanpa Nama'}</div>
+                                        <div class="text-xs text-gray-500 font-mono bg-gray-100 px-1.5 py-0.5 rounded inline-block mt-0.5">${c.idCompany}</div>
+                                    </div>
+                                </div>
+                            </td>
+                            <td class="px-6 py-4">
+                                <div class="w-full max-w-xs">
+                                    <div class="flex justify-between text-xs mb-1">
+                                        <span class="font-medium text-gray-700">${Utils.formatBytes(usedB)}</span>
+                                        <span class="text-gray-400">/ ${Utils.formatBytes(maxB, 0)}</span>
+                                    </div>
+                                    <div class="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
+                                        <div class="${color} h-1.5 rounded-full" style="width: ${Math.min(pct, 100)}%"></div>
+                                    </div>
+                                </div>
+                            </td>
+                            <td class="px-6 py-4">
+                                <div class="w-full max-w-xs">
+                                    <div class="flex justify-between text-xs mb-1">
+                                        <span class="font-medium text-gray-700">${curEmp} Org</span>
+                                        <span class="text-gray-400">/ ${maxEmp}</span>
+                                    </div>
+                                    <div class="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
+                                        <div class="${empColor} h-1.5 rounded-full" style="width: ${Math.min(empPct, 100)}%"></div>
+                                    </div>
+                                </div>
+                            </td>
+                            <td class="px-6 py-4 text-right">
+                                <button onclick="App.company.edit('${c.id}')" class="text-gray-400 hover:text-indigo-600 transition-colors p-2 rounded-lg hover:bg-indigo-50">
+                                    <i class="fa-solid fa-pen-to-square"></i>
+                                </button>
+                            </td>
+                        </tr>
+                    `;
+                });
+            }
+
+            handleSearch(keyword) {
+                const k = keyword.toLowerCase();
+                const filtered = this.data.filter(c => 
+                    (c.namaPerusahaan || '').toLowerCase().includes(k) || 
+                    (c.idCompany || '').toLowerCase().includes(k)
+                );
+                this.renderTable(filtered);
+            }
+
+            edit(id) {
+                const item = this.data.find(x => x.id === id);
+                if (item) App.ui.openModal(item);
+            }
+
+            async save() {
+                const id = document.getElementById('edit-id').value;
+                const gb = parseInt(document.getElementById('input-storage').value);
+                const emp = parseInt(document.getElementById('input-karyawan').value);
+                const bytes = gb * (1024**3);
+
+                const item = this.data.find(x => x.id === id);
+                if (!item) return;
+
+                if (!confirm(`Update ${item.namaPerusahaan}?\nStorage: ${gb}GB\nKaryawan: ${emp}`)) return;
+
+                try {
+                    await updateDoc(doc(db, "companies", id), { maxStorage: bytes, maxKaryawan: emp });
+                    await App.audit.log("UPDATE_RESOURCE", `Updated ${item.namaPerusahaan}: ${gb}GB, ${emp} Users`);
+                    
+                    App.ui.closeModal();
+                    App.ui.showToast("Data diperbarui", "success");
+                    this.loadAll(); // Reload to reflect changes
+                } catch (e) { App.ui.showToast(e.message, "error"); }
+            }
+
+            async syncStorage() {
+                const id = document.getElementById('edit-id').value;
+                if (!confirm("Hitung ulang storage (scan file)? Ini bisa memakan waktu.")) return;
+                
+                try {
+                    const files = await getDocs(collection(db, "companies", id, "files"));
+                    let total = 0;
+                    files.forEach(d => {
+                        const f = d.data();
+                        total += f.sizeBytes ? f.sizeBytes : Utils.parseBytes(f.size);
+                    });
+                    
+                    await updateDoc(doc(db, "companies", id), { usedStorage: total });
+                    document.getElementById('modal-used-storage').textContent = Utils.formatBytes(total);
+                    App.ui.showToast("Sync Storage Selesai", "success");
+                    this.loadAll(); // Update table background
+                } catch (e) { App.ui.showToast(e.message, "error"); }
+            }
+
+            async syncEmployees() {
+                const id = document.getElementById('edit-id').value;
+                const item = this.data.find(x => x.id === id);
+                if (!item) return;
+                const cid = item.idCompany || item.id; // Fallback
+
+                if (!confirm("Hitung ulang user aktif?")) return;
+
+                try {
+                    const q = query(collection(db, "users"), where("idCompany", "==", cid));
+                    const snap = await getCountFromServer(q);
+                    const count = snap.data().count;
+
+                    await updateDoc(doc(db, "companies", id), { totalEmployees: count });
+                    document.getElementById('modal-real-emp').textContent = count;
+                    App.ui.showToast("Sync User Selesai", "success");
+                    this.loadAll();
+                } catch (e) { App.ui.showToast(e.message, "error"); }
+            }
+        }
+
+        // --- AUTH & ADMIN SERVICE ---
+        class AuthService {
+            constructor() {
+                this.user = null;
+            }
+
+            init() {
+                onAuthStateChanged(auth, async (u) => {
+                    if (u) {
+                        const isRoot = u.email === ROOT_ADMIN;
+                        let isSuper = false;
+                        if (!isRoot) {
+                            const snap = await getDoc(doc(db, "super_admins", u.email));
+                            isSuper = snap.exists();
+                        }
+
+                        if (isRoot || isSuper) {
+                            this.user = u;
+                            document.getElementById('login-screen').classList.add('hidden');
+                            document.getElementById('app-content').classList.remove('hidden');
+                            document.getElementById('admin-name').textContent = u.displayName;
+                            document.getElementById('admin-email').textContent = u.email;
+                            App.company.loadAll();
+                            App.admin.loadList();
+                        } else {
+                            await signOut(auth);
+                            document.getElementById('login-error').textContent = "Akses Ditolak. Email tidak terdaftar.";
+                            document.getElementById('login-error').classList.remove('hidden');
+                        }
+                    } else {
+                        document.getElementById('login-screen').classList.remove('hidden');
+                        document.getElementById('app-content').classList.add('hidden');
+                    }
+                });
+            }
+
+            login() { signInWithPopup(auth, provider).catch(e => App.ui.showToast(e.message, "error")); }
+            logout() { signOut(auth).then(() => window.location.reload()); }
+        }
+
+        class AdminManager {
+            async loadList() {
+                const ul = document.getElementById('admin-list');
+                ul.innerHTML = "";
+                // Root
+                ul.innerHTML += `<li class="px-6 py-4 flex justify-between bg-yellow-50/50 border-b border-yellow-100"><div class="flex gap-3 items-center"><i class="fa-solid fa-crown text-yellow-500"></i><div><p class="text-sm font-semibold">${ROOT_ADMIN}</p><p class="text-[10px] uppercase text-yellow-600 font-bold">Root</p></div></div></li>`;
+                
+                try {
+                    const snap = await getDocs(collection(db, "super_admins"));
+                    snap.forEach(d => {
+                        const da = d.data();
+                        ul.innerHTML += `
+                            <li class="px-6 py-4 flex justify-between hover:bg-gray-50 border-b border-gray-100 items-center">
+                                <div class="flex gap-3 items-center">
+                                    <div class="bg-gray-100 p-2 rounded-full text-gray-500"><i class="fa-solid fa-user-shield"></i></div>
+                                    <div><p class="text-sm font-medium text-gray-900">${d.id}</p><p class="text-xs text-gray-400">By: ${da.addedBy}</p></div>
+                                </div>
+                                <button onclick="App.admin.remove('${d.id}')" class="text-gray-400 hover:text-red-600"><i class="fa-solid fa-trash-can"></i></button>
+                            </li>`;
+                    });
+                } catch (e) { console.error(e); }
+            }
+
+            async add() {
+                const el = document.getElementById('new-admin-email');
+                const email = el.value.trim();
+                if (!email) return App.ui.showToast("Email kosong", "error");
+                if (email === ROOT_ADMIN) return App.ui.showToast("Sudah Root", "error");
+
+                try {
+                    await setDoc(doc(db, "super_admins", email), { email, addedBy: App.auth.user.email, createdAt: new Date() });
+                    await App.audit.log("ADD_ADMIN", `Added ${email}`);
+                    App.ui.showToast("Admin ditambahkan", "success");
+                    el.value = "";
+                    this.loadList();
+                } catch (e) { App.ui.showToast(e.message, "error"); }
+            }
+
+            async remove(email) {
+                if (!confirm(`Hapus akses ${email}?`)) return;
+                try {
+                    await deleteDoc(doc(db, "super_admins", email));
+                    await App.audit.log("REMOVE_ADMIN", `Removed ${email}`);
+                    App.ui.showToast("Akses dihapus", "success");
+                    this.loadList();
+                } catch (e) { App.ui.showToast(e.message, "error"); }
+            }
+        }
+
+        // --- APP ENTRY POINT ---
+        const App = {
+            auth: new AuthService(),
+            company: new CompanyService(),
+            ui: new UIManager(),
+            audit: new AuditService(),
+            admin: new AdminManager()
+        };
+
+        // Expose to window for onclick handlers
+        window.App = App;
+        App.auth.init();
+
+    </script>
+</body>
+</html>
