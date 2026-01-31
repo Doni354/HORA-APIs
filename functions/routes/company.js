@@ -507,28 +507,49 @@ router.post("/log-activity", verifyToken, async (req, res) => {
 });
 
 // ---------------------------------------------------------
-// 5. GET LIST PEGAWAI (Dengan info Max Quota)
+// 5. GET LIST PEGAWAI (Dengan info Max Quota & Storage Fix)
 // ---------------------------------------------------------
 router.get("/list", verifyToken, async (req, res) => {
   try {
     const myCompanyId = req.user.idCompany;
     const myEmail = req.user.email;
 
-    if (!myCompanyId) return res.status(400).json({ message: "Akun Anda tidak terikat dengan perusahaan manapun." });
+    if (!myCompanyId) {
+      return res.status(400).json({ message: "Akun Anda tidak terikat dengan perusahaan manapun." });
+    }
 
     const snapshot = await db.collection("users")
       .where("idCompany", "==", myCompanyId)
       .orderBy("createdAt", "desc")
       .get();
 
-    // --- AMBIL INFO KUOTA UNTUK FRONTEND ---
-    const companyDoc = await db.collection("companies").doc(myCompanyId).get();
-    const maxKaryawan = companyDoc.exists ? (companyDoc.data().maxKaryawan || 10) : 10;
+    // --- AMBIL INFO KUOTA & STORAGE UNTUK FRONTEND ---
+    // PENTING: Deklarasi variable DI LUAR if, supaya scope-nya global di fungsi ini
+    let maxKaryawan = 10;
+    let maxStorage = 0;
+    let usedStorage = 0;
 
+    const companyDoc = await db.collection("companies").doc(myCompanyId).get();
+    
+    if (companyDoc.exists) {
+        const cData = companyDoc.data();
+        // Gunakan operator || untuk handling data lama yang kosong (undefined)
+        maxKaryawan = cData.maxKaryawan || 10;
+        maxStorage = cData.maxStorage || 0;
+        usedStorage = cData.usedStorage || 0;
+    }
+
+    // Handle jika list pegawai kosong
     if (snapshot.empty) {
       return res.status(200).json({
         message: "Belum ada pegawai lain.",
         maxQuota: maxKaryawan,
+        storage: {
+            used: usedStorage,
+            max: maxStorage,
+            // LOGIC FIX: Hapus "&& maxStorage > 0" agar jika 0/0 dianggap penuh (true)
+            isFull: usedStorage >= maxStorage 
+        },
         data: [],
       });
     }
@@ -553,11 +574,25 @@ router.get("/list", verifyToken, async (req, res) => {
       message: "Data pegawai berhasil diambil",
       requestor: myEmail,
       total: allUsers.length,
-      maxQuota: maxKaryawan, // <-- Tambahan field
+      maxQuota: maxKaryawan,
+      storage: {
+        used: usedStorage,
+        max: maxStorage,
+        // LOGIC FIX: Hapus "&& maxStorage > 0"
+        isFull: usedStorage >= maxStorage
+      },
       data: allUsers,
     });
   } catch (e) {
     console.error("Get Employees Error:", e);
+    
+    // Handle error index firestore jika belum dibuat
+    if (e.code === 9 || e.message.includes("requires an index")) {
+        return res.status(500).json({
+          message: "Server Error: Index Firestore belum dibuat. Cek console log server.",
+        });
+      }
+
     return res.status(500).json({ message: "Server Error" });
   }
 });

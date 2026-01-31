@@ -8,82 +8,126 @@ const Busboy = require("busboy");
 const path = require("path");
 const { Timestamp } = require("firebase-admin/firestore");
 const {uploadFileBerkas,formatFileSize,parseSizeStringToBytes, } = require("../helper/uploadFile");
+const { FieldValue } = require("firebase-admin/firestore"); // Import FieldValue
 
 // ---------------------------------------------------------
-// POST /upload - Upload File dengan Kategori
+// POST /upload - Upload File dengan Cek Kuota Storage
 // ---------------------------------------------------------
-// URL: {{BaseUrl}}/api/files/upload?category=reimburse
 router.post("/upload", verifyToken, async (req, res) => {
   try {
     const user = req.user;
-    // Ambil category dari Query Param, default ke "general" jika kosong
     const category = req.query.category || "general";
 
     // 1. Validasi Akses
     if (!["admin", "staff"].includes(user.role)) {
-      return res.status(403).json({
-        message: "Akses ditolak. Hanya Admin & Staff yang boleh upload.",
-      });
+      return res.status(403).json({ message: "Hanya Admin & Staff yang boleh upload." });
     }
-
     if (!user.idCompany) {
       return res.status(400).json({ message: "ID Company tidak valid." });
     }
 
-    // 2. Panggil Helper Upload
-    const folderPath = `company_files/${user.idCompany}`;
-    const result = await uploadFileBerkas(req, folderPath);
+    // 2. CEK KUOTA STORAGE (Pre-Upload Check)
+    const companyRef = db.collection("companies").doc(user.idCompany);
+    const companyDoc = await companyRef.get();
+    
+    if (!companyDoc.exists) return res.status(404).json({ message: "Perusahaan tidak ditemukan." });
+    
+    const companyData = companyDoc.data();
+    const maxStorage = companyData.maxStorage || 0; // Default 0 (Locked)
+    const usedStorage = companyData.usedStorage || 0;
 
-    // 3. Simpan Metadata ke Firestore
+    // A. Jika Max Storage 0, berarti belum berlangganan/aktivasi
+    if (maxStorage === 0) {
+        return res.status(402).json({ 
+            message: "Penyimpanan Anda 0 GB. Silakan upgrade paket perusahaan untuk mulai mengunggah berkas.",
+            code: "NO_STORAGE_QUOTA"
+        });
+    }
+
+    // B. Jika sudah penuh sebelum upload
+    if (usedStorage >= maxStorage) {
+        return res.status(400).json({ 
+            message: "Penyimpanan penuh! Hapus berkas lama atau upgrade paket.",
+            code: "STORAGE_FULL"
+        });
+    }
+
+    // 3. Proses Upload ke Cloud Storage
+    const folderPath = `company_files/${user.idCompany}`;
+    let result;
+    
+    try {
+        result = await uploadFileBerkas(req, folderPath);
+    } catch (uploadError) {
+        return res.status(500).json({ message: "Gagal upload ke server.", error: uploadError.message });
+    }
+
+    // 4. CEK KUOTA LAGI (Post-Upload Check)
+    // Kita baru tau size asli file setelah selesai upload
+    const newFileSize = result.sizeBytes;
+    
+    if (usedStorage + newFileSize > maxStorage) {
+        // ROLLBACK: Hapus file yang barusan diupload karena melampaui batas
+        try {
+            await bucket.file(result.storagePath).delete();
+        } catch (delErr) {
+            console.error("Gagal rollback file:", delErr);
+        }
+
+        return res.status(400).json({ 
+            message: `File terlalu besar (${result.sizeDisplay}). Sisa kuota tidak mencukupi.`,
+            code: "QUOTA_EXCEEDED"
+        });
+    }
+
+    // 5. Simpan Metadata & Update Kuota Terpakai
     const newFileDoc = {
       fileName: result.originalName,
       storagePath: result.storagePath,
       downloadUrl: result.publicUrl,
       mimeType: result.mimeType,
       size: result.sizeDisplay,
-      sizeBytes: result.sizeBytes,
-
-      // Metadata category
+      sizeBytes: result.sizeBytes, // Simpan bytes untuk perhitungan
       category: category,
-
       uploadedBy: user.email,
       uploaderName: user.nama || "User",
       uploaderRole: user.role,
-
       createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
       updatedBy: null,
     };
 
-    const docRef = await db
-      .collection("companies")
-      .doc(user.idCompany)
-      .collection("files")
-      .add(newFileDoc);
+    // Jalankan Transaction/Batch agar atomik (Simpan File + Update Used Storage)
+    const batch = db.batch();
+    
+    // A. Add File Doc
+    const newDocRef = companyRef.collection("files").doc();
+    batch.set(newDocRef, newFileDoc);
 
-    // 4. Log Aktivitas
+    // B. Increment Used Storage
+    batch.update(companyRef, {
+        usedStorage: FieldValue.increment(newFileSize)
+    });
+
+    await batch.commit();
+
+    // 6. Log Aktivitas
     await logCompanyActivity(user.idCompany, {
       actorEmail: user.email,
       actorName: user.nama || "User",
-      target: docRef.id,
+      target: newDocRef.id,
       action: "UPLOAD_FILE",
-      description: `Mengupload berkas (${category}): ${result.originalName}`,
+      description: `Mengupload berkas (${category}): ${result.originalName} (${result.sizeDisplay})`,
     });
 
     return res.status(201).json({
       message: "Berkas berhasil diupload.",
-      fileId: docRef.id,
-      data: {
-        id: docRef.id,
-        ...newFileDoc,
-      },
+      data: { id: newDocRef.id, ...newFileDoc },
     });
+
   } catch (e) {
-    console.error("Upload File Error:", e);
-    return res.status(500).json({
-      message: "Gagal mengupload file.",
-      error: e.message,
-    });
+    console.error("Upload Error:", e);
+    return res.status(500).json({ message: "Server Error", error: e.message });
   }
 });
 
@@ -286,7 +330,7 @@ router.put("/:fileId", verifyToken, async (req, res) => {
 });
 
 // ---------------------------------------------------------
-// 4. HAPUS BERKAS (Delete)
+// DELETE BERKAS (Mengembalikan Kuota Storage)
 // ---------------------------------------------------------
 router.delete("/:fileId", verifyToken, async (req, res) => {
   try {
@@ -295,57 +339,57 @@ router.delete("/:fileId", verifyToken, async (req, res) => {
 
     // Security: Hanya Admin
     if (user.role !== "admin") {
-      return res
-        .status(403)
-        .json({ message: "Hanya Admin yang boleh menghapus berkas." });
+      return res.status(403).json({ message: "Hanya Admin yang boleh menghapus berkas." });
     }
 
-    const fileRef = db
-      .collection("companies")
-      .doc(user.idCompany)
-      .collection("files")
-      .doc(fileId);
-    const fileDoc = await fileRef.get();
+    const companyRef = db.collection("companies").doc(user.idCompany);
+    const fileRef = companyRef.collection("files").doc(fileId);
+    
+    // Gunakan Transaction untuk memastikan konsistensi hapus + update kuota
+    await db.runTransaction(async (transaction) => {
+        const fileDoc = await transaction.get(fileRef);
+        if (!fileDoc.exists) throw new Error("FILE_NOT_FOUND");
+        
+        const data = fileDoc.data();
+        const fileSizeToDelete = data.sizeBytes || 0; // Ambil size bytes
 
-    if (!fileDoc.exists) {
-      return res
-        .status(404)
-        .json({ message: "Berkas tidak ditemukan atau sudah dihapus." });
-    }
+        // 1. Delete Metadata
+        transaction.delete(fileRef);
 
-    const data = fileDoc.data();
+        // 2. Decrement Used Storage
+        // Pakai increment negatif untuk mengurangi
+        transaction.update(companyRef, {
+            usedStorage: FieldValue.increment(-fileSizeToDelete)
+        });
 
-    // 1. Hapus Fisik dari Google Cloud Storage
-    if (data.storagePath) {
-      try {
-        await bucket.file(data.storagePath).delete();
-        console.log("Deleted file from storage:", data.storagePath);
-      } catch (storageErr) {
-        console.warn(
-          "Gagal hapus fisik file (mungkin sudah hilang):",
-          storageErr.message
-        );
-        // Lanjut aja hapus DB-nya biar bersih
-      }
-    }
+        // 3. Hapus Fisik di Luar Transaksi (atau di sini, tapi promise bucket harus ditunggu)
+        // Kita simpan info path untuk dihapus setelah transaksi sukses
+        // (Tapi dalam firebase function, lebih aman hapus fisik belakangan atau biarkan async)
+        if (data.storagePath) {
+             bucket.file(data.storagePath).delete().catch(err => 
+                console.warn("Gagal hapus fisik:", err.message)
+            );
+        }
 
-    // 2. Hapus Metadata dari Firestore
-    await fileRef.delete();
+        // Log Aktivitas (di luar transaksi biasanya, tapi logic kita butuh await)
+        // Kita biarkan log dieksekusi setelah response saja atau disini tidak apa2.
+    });
 
-    // 3. Log Aktivitas
     await logCompanyActivity(user.idCompany, {
       actorEmail: user.email,
       actorName: user.nama || "Admin",
       target: fileId,
       action: "DELETE_FILE",
-      description: `Admin menghapus berkas: ${data.fileName}`,
+      description: `Admin menghapus berkas.`,
     });
 
-    return res
-      .status(200)
-      .json({ message: "Berkas berhasil dihapus permanen." });
+    return res.status(200).json({ message: "Berkas berhasil dihapus & kuota dikembalikan." });
+
   } catch (e) {
-    console.error("Delete File Error:", e);
+    if (e.message === "FILE_NOT_FOUND") {
+        return res.status(404).json({ message: "Berkas tidak ditemukan." });
+    }
+    console.error("Delete Error:", e);
     return res.status(500).json({ message: "Server Error" });
   }
 });

@@ -483,7 +483,10 @@ function generateSmartCompanyCode(length) {
 router.post("/registrasi", async (req, res) => {
   try {
     let idToken = "";
-    if (req.headers.authorization && req.headers.authorization.startsWith("Bearer ")) {
+    if (
+      req.headers.authorization &&
+      req.headers.authorization.startsWith("Bearer ")
+    ) {
       idToken = req.headers.authorization.split("Bearer ")[1];
     } else if (req.body.idToken) {
       idToken = req.body.idToken;
@@ -494,14 +497,16 @@ router.post("/registrasi", async (req, res) => {
       return res.status(400).json({ message: "Data tidak lengkap." });
     }
 
-    const decodedToken = await admin.auth().verifyIdToken(idToken.toString().trim());
+    const decodedToken = await admin
+      .auth()
+      .verifyIdToken(idToken.toString().trim());
     const email = decodedToken.email;
     const uid = decodedToken.uid;
 
     // --- LOGIKA GENERATE ID DENGAN AUTO-SCALE ---
     let idCompany = "";
     let isUnique = false;
-    let currentLength = 6; 
+    let currentLength = 6;
     let totalAttempts = 0;
 
     while (!isUnique && totalAttempts < 15) {
@@ -515,7 +520,8 @@ router.post("/registrasi", async (req, res) => {
       }
     }
 
-    if (!isUnique) return res.status(500).json({ message: "Gagal generate ID unik." });
+    if (!isUnique)
+      return res.status(500).json({ message: "Gagal generate ID unik." });
 
     await db.runTransaction(async (transaction) => {
       const userRef = db.collection("users").doc(email);
@@ -524,14 +530,17 @@ router.post("/registrasi", async (req, res) => {
       if (userDoc.exists) throw new Error("USER_EXISTS");
 
       const companyRef = db.collection("companies").doc(idCompany);
-      
+
       // Setup Company dengan maxKaryawan: 10
       transaction.set(companyRef, {
         idCompany,
         namaPerusahaan,
         alamatLoc,
         totalLike: 0,
-        maxKaryawan: 10, // <--- DEFAULT KUOTA
+        // --- BATASAN SISTEM ---
+        maxKaryawan: 10, // Default: 10 Orang
+        maxStorage: 0, // Default: 0 Bytes (Harus upgrade dulu baru bisa upload)
+        usedStorage: 0, // Terpakai: 0 Bytes
         createdAt: Timestamp.now(),
         createdBy: email,
         ownerUid: uid,
@@ -563,11 +572,21 @@ router.post("/registrasi", async (req, res) => {
 
     return res.status(200).json({
       message: "Registrasi Berhasil",
-      data: { companyCode: idCompany, companyName: namaPerusahaan, maxKaryawan: 10 },
+      data: {
+        companyCode: idCompany,
+        companyName: namaPerusahaan,
+        maxKaryawan: 10,
+      },
     });
-
   } catch (e) {
-    return res.status(500).json({ message: e.message === "USER_EXISTS" ? "Email sudah terdaftar." : "Server Error" });
+    return res
+      .status(500)
+      .json({
+        message:
+          e.message === "USER_EXISTS"
+            ? "Email sudah terdaftar."
+            : "Server Error",
+      });
   }
 });
 
