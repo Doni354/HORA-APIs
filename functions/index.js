@@ -1,9 +1,10 @@
 /* eslint-disable */
+const admin = require("firebase-admin");
+admin.initializeApp();
 const { onRequest } = require("firebase-functions/v2/https");
 const { setGlobalOptions } = require("firebase-functions/v2/options");
 const express = require("express");
 const cors = require("cors");
-
 const loginRoutes = require("./routes/login");
 const absensiRoutes = require("./routes/absensi");
 const profileRoutes = require("./routes/profile");
@@ -15,6 +16,12 @@ const arsipRoutes = require("./routes/arsip");
 const inboxRoutes = require("./routes/inbox");
 const tugasRoutes = require("./routes/tugas");
 const reimburseRoutes = require("./routes/reimburse");
+const FCM = require("./FCM/fcm");
+// ---------------------------------------------------------
+// FCM
+// ---------------------------------------------------------
+// Export function
+exports.onNewCompanyMessage = FCM.onNewCompanyMessage;
 
 // ---------------------------------------------------------
 // Cloud Functions Global Config
@@ -44,7 +51,7 @@ app.use("/api/kontak", kontakRoutes);
 app.use("/api/arsip", arsipRoutes);
 app.use("/api/inbox", inboxRoutes);
 app.use("/api/tugas", tugasRoutes);
-app.use("/api/reimburse", reimburseRoutes)
+app.use("/api/reimburse", reimburseRoutes);
 // ---------------------------------------------------------
 // TEST
 // ---------------------------------------------------------

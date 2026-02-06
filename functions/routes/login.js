@@ -317,7 +317,7 @@ const handleEmailVerification = async (db, userRef, userData, email) => {
 // ==================================================================
 router.post("/login-google", async (req, res) => {
   try {
-    const { idToken, deviceId, deviceInfo } = req.body;
+    const { idToken, deviceId, deviceInfo, FcmToken } = req.body;
 
     // --- A. Validasi Input ---
     if (!idToken)
@@ -326,6 +326,10 @@ router.post("/login-google", async (req, res) => {
       return res
         .status(400)
         .json({ message: "Device ID diperlukan untuk keamanan." });
+    if (!FcmToken)
+      return res
+        .status(400)
+        .json({ message: "FcmToken diperlukan untuk Notifikasi." });
 
     // --- B. Verifikasi Token Google ---
     let decodedToken;
@@ -379,6 +383,7 @@ router.post("/login-google", async (req, res) => {
       lastLogin: Timestamp.now(),
       currentDeviceId: deviceId,
       deviceInfo: deviceInfo || "Unknown",
+      fcmTokens: admin.firestore.FieldValue.arrayUnion(FcmToken),
     });
 
     const tokenPayload = {
@@ -386,7 +391,8 @@ router.post("/login-google", async (req, res) => {
       role: data.role,
       idCompany: data.idCompany,
       status: data.status,
-      deviceId: deviceId, // Token terikat ke device ini
+      deviceId: deviceId,
+      fcmTokens: FcmToken,
     };
 
     const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, {
@@ -579,14 +585,10 @@ router.post("/registrasi", async (req, res) => {
       },
     });
   } catch (e) {
-    return res
-      .status(500)
-      .json({
-        message:
-          e.message === "USER_EXISTS"
-            ? "Email sudah terdaftar."
-            : "Server Error",
-      });
+    return res.status(500).json({
+      message:
+        e.message === "USER_EXISTS" ? "Email sudah terdaftar." : "Server Error",
+    });
   }
 });
 
