@@ -110,38 +110,21 @@ exports.onNewCompanyMessage = onDocumentCreated(
     const uniqueTokensGeneral = [...new Set(tokensGeneral)];
 
     // =====================================================
-    // 3️⃣ Config Android & iOS (CRITICAL FIXES)
+    // 3️⃣ Config (DATA-ONLY PAYLOAD)
     // =====================================================
     
-    // [ANDROID FIX]
-    // 1. Bedakan Channel ID untuk PING agar user bisa setting bypass DND di channel ini secara khusus.
-    // 2. Tambahkan clickAction agar background notification lancar.
-    const androidChannelId = isPing ? "urgent_alert" : "chat_messages";
-    
-    const androidConfig = {
-      priority: "high", // Wajib 'high' agar wake up screen saat background
-      notification: { 
-        sound: "default", 
-        channelId: androidChannelId, 
-        tag: companyId,
-        clickAction: "FLUTTER_NOTIFICATION_CLICK", // [FIX] Penting untuk background handler
-        visibility: "public", // [FIX] Agar muncul di lock screen
-      },
-    };
-
     const promises = [];
 
     // --- BATCH 1: Ke User yang Di-Mention (PING Logic) ---
     if (uniqueTokensMentioned.length > 0) {
       const bodyMentioned = `Menyebut anda : ${truncatedContent}`;
-      const interruptionLevel = isPing ? "time-sensitive" : "active";
+      const androidChannelId = isPing ? "urgent_alert" : "chat_message"; // [FIX] chat_messages -> chat_message
 
       const payloadMentioned = {
-        notification: {
+        // [FIX] Bagian notification dihapus agar dihandle FE sepenuhnya
+        data: {
           title: authorName,
           body: bodyMentioned,
-        },
-        data: {
           click_action: "FLUTTER_NOTIFICATION_CLICK",
           companyId: companyId,
           messageId: snap.id,
@@ -149,14 +132,16 @@ exports.onNewCompanyMessage = onDocumentCreated(
           authorId: authorId,
           route: "chat_screen",
           isPing: isPing ? "true" : "false",
+          channelId: androidChannelId, // FE bisa baca ini untuk local notification
         },
-        android: androidConfig, // Menggunakan config dinamis (channel urgent/normal)
+        android: {
+          priority: "high", // Tetap 'high' agar data cepat sampai
+        },
         apns: {
           payload: {
             aps: {
-              sound: "default",
-              threadId: companyId,
-              "interruption-level": interruptionLevel,
+              contentAvailable: true, // Penting untuk background data fetch di iOS
+              mutableContent: true,
             },
           },
         },
@@ -199,38 +184,27 @@ exports.onNewCompanyMessage = onDocumentCreated(
         bodyGeneral = "📩 Mengirim pesan";
       }
 
-      // Config Android untuk General (Selalu Normal)
-      const androidGeneralConfig = {
-        priority: "high",
-        notification: { 
-          sound: "default", 
-          channelId: "chat_messages", // Selalu chat biasa
-          tag: companyId,
-          clickAction: "FLUTTER_NOTIFICATION_CLICK",
-          visibility: "public",
-        },
-      };
-
       const payloadGeneral = {
-        notification: {
+        // [FIX] Bagian notification dihapus
+        data: {
           title: authorName,
           body: bodyGeneral,
-        },
-        data: {
           click_action: "FLUTTER_NOTIFICATION_CLICK",
           companyId: companyId,
           messageId: snap.id,
           type: type,
           authorId: authorId,
           route: "chat_screen",
+          channelId: "chat_message", // [FIX] chat_messages -> chat_message
         },
-        android: androidGeneralConfig,
+        android: {
+          priority: "high",
+        },
         apns: {
           payload: {
             aps: {
-              sound: "default",
-              threadId: companyId,
-              "interruption-level": "active", 
+              contentAvailable: true,
+              mutableContent: true,
             },
           },
         },
