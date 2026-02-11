@@ -943,4 +943,91 @@ router.get("/admin/confirm-reset-device", async (req, res) => {
     res.status(500).send("<h1>Terjadi kesalahan server.</h1>");
   }
 });
+
+// ==================================================================
+// 2. MAIN ROUTE (WEB/ADMIN VERSION)
+// ==================================================================
+router.post("/login-google-admin", async (req, res) => {
+  try {
+    // Hanya ambil idToken, deviceInfo opsional untuk logging
+    const { idToken, deviceInfo } = req.body;
+
+    // --- A. Validasi Input ---
+    if (!idToken) {
+      return res.status(400).json({ message: "Google ID Token diperlukan." });
+    }
+
+    // --- B. Verifikasi Token Google ---
+    let decodedToken;
+    try {
+      decodedToken = await admin
+        .auth()
+        .verifyIdToken(idToken.toString().trim());
+    } catch (error) {
+      console.error("Firebase Auth Error:", error);
+      return res.status(401).json({ message: "Sesi Google tidak valid atau kedaluwarsa." });
+    }
+
+    const email = decodedToken.email;
+    const userRef = db.collection("users").doc(email);
+    const userDoc = await userRef.get();
+
+    // --- C. Cek User Exists ---
+    if (!userDoc.exists) {
+      return res.status(404).json({ 
+        message: "Akun tidak ditemukan. Admin harus terdaftar di sistem." 
+      });
+    }
+
+    const data = userDoc.data();
+
+    // --- D. Cek Status & Role ---
+    const statusError = checkUserStatus(data);
+    if (statusError) {
+      return res.status(403).json({ message: statusError });
+    }
+
+    // --- E. Cek Verifikasi Email ---
+    const emailCheck = await handleEmailVerification(db, userRef, data, email);
+    if (!emailCheck.isVerified) {
+      const { status, ...errJson } = emailCheck.errorData;
+      return res.status(status).json(errJson);
+    }
+
+    // ==============================================================
+    // SUKSES: Update DB & Generate Token (Tanpa Device Lock)
+    // ==============================================================
+
+    await userRef.update({
+      lastLogin: admin.firestore.Timestamp.now(),
+      lastDeviceInfo: deviceInfo || "Web Browser",
+      // Kita hapus update currentDeviceId & fcmTokens di sini
+    });
+
+    const tokenPayload = {
+      id: email,
+      role: data.role,
+      idCompany: data.idCompany,
+      status: data.status,
+      loginType: "web-admin" // Tambahan flag supaya tahu ini login dari web
+    };
+
+    const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, {
+      expiresIn: "12h", // Untuk admin, biasanya session lebih pendek (misal 12 jam) dibanding app
+    });
+
+    return res.status(200).json({
+      message: "Login Admin Berhasil",
+      token: token,
+      user: {
+        email: email,
+        role: data.role,
+        nama: data.username,
+      },
+    });
+  } catch (e) {
+    console.error("Login Admin Error:", e);
+    return res.status(500).json({ message: "Server Error" });
+  }
+});
 module.exports = router;
