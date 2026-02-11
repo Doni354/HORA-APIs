@@ -126,10 +126,6 @@ router.get("/list", verifyToken, async (req, res) => {
       .doc(user.idCompany)
       .collection("leaves");
 
-    if (user.role !== "admin") {
-      query = query.where("userId", "==", user.email);
-    }
-
     const snapshot = await query.orderBy("createdAt", "desc").get();
 
     if (snapshot.empty) {
