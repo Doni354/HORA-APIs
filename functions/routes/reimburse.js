@@ -51,11 +51,6 @@ router.get("/list", verifyToken, async (req, res) => {
       .collection("reimbursements")
       .orderBy("createdAt", "desc");
 
-    // Jika Staff, hanya lihat reimburse milik sendiri
-    if (role !== "admin") {
-      query = query.where("requestByEmail", "==", email);
-    }
-
     const snapshot = await query.get();
 
     if (snapshot.empty) {
