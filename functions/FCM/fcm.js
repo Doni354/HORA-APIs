@@ -8,6 +8,13 @@ if (admin.apps.length === 0) {
   admin.initializeApp();
 }
 
+/**
+ * Trigger saat ada pesan baru di koleksi messages perusahaan.
+ * Mengirim notifikasi via FCM dengan logika:
+ * 1. Jika ada 'PING!!!' + Mention: Hanya target mention yang dapat (Eksklusif & Urgent).
+ * 2. Jika Mention biasa: Target dapat notif 'Menyebut anda', yang lain dapat notif biasa.
+ * 3. Jika Pesan biasa: Semua anggota (selain pengirim) dapat notif.
+ */
 exports.onNewCompanyMessage = onDocumentCreated(
   {
     document: "companies/{companyId}/messages/{messageId}",
@@ -21,22 +28,19 @@ exports.onNewCompanyMessage = onDocumentCreated(
 
     const message = snap.data();
     const { companyId } = event.params;
-    
+
     const authorId = message.authorId;
-    const authorEmail = message.authorEmail; 
+    const authorEmail = message.authorEmail;
     const type = message.type;
-    const textContent = message.text || ""; 
+    const textContent = message.text || "";
 
     // =====================================================
-    // 0️⃣ Cek Kondisi "PING!!!" (Time Sensitive)
+    // 0️⃣ Inisialisasi & Cek Kondisi Spesial
     // =====================================================
     const isPing = textContent.includes("PING!!!");
-
-    // =====================================================
-    // 1️⃣ Tentukan Title & Content
-    // =====================================================
     const authorName = message.authorName || "Anggota Tim";
-    const truncate = (str, n) => (str && str.length > n) ? str.substr(0, n - 1) + "..." : str;
+    const truncate = (str, n) =>
+      str && str.length > n ? str.substr(0, n - 1) + "..." : str;
 
     const isUserMentioned = (text, userName) => {
       if (!text || !userName) return false;
@@ -47,20 +51,12 @@ exports.onNewCompanyMessage = onDocumentCreated(
 
     let mentionedSomeoneElse = "";
     const mentionMatch = textContent.match(/@(?:\{([^}]+)\}|(\w+))/);
-    
     if (type === "text" && mentionMatch) {
       mentionedSomeoneElse = (mentionMatch[1] || mentionMatch[2] || "").trim();
     }
 
-    let displayContent = textContent;
-    if (mentionedSomeoneElse) {
-      displayContent = textContent.replace(/@(?:\{[^}]+\}|[a-zA-Z0-9_]+)/, "").trim();
-      if (!displayContent) displayContent = "mencolek"; 
-    }
-    const truncatedContent = truncate(displayContent, 100);
-
     // =====================================================
-    // 2️⃣ Ambil token
+    // 1️⃣ Filter Token Berdasarkan Target
     // =====================================================
     const usersSnap = await admin
       .firestore()
@@ -70,209 +66,199 @@ exports.onNewCompanyMessage = onDocumentCreated(
 
     const tokensMentioned = [];
     const tokensGeneral = [];
-    const tokenOwnerMap = {}; 
+    const tokenOwnerMap = {};
 
     usersSnap.forEach((doc) => {
       const userData = doc.data();
-      const docId = doc.id; 
+      const docId = doc.id;
 
       if (authorEmail && docId === authorEmail) return;
-      if (docId === authorId) return;
-      if (userData.uid === authorId) return;
-      if (userData.email === authorEmail) return;
+      if (
+        docId === authorId ||
+        userData.uid === authorId ||
+        userData.email === authorEmail
+      )
+        return;
 
       const userTokens = userData.fcmTokens;
       if (!userTokens) return;
 
-      let targetGroup = tokensGeneral; 
+      const userName = userData.name || userData.username;
+      const isActuallyMentioned =
+        type === "text" && isUserMentioned(textContent, userName);
 
-      if (type === "text") {
-        const userName = userData.name || userData.username;
-        if (isUserMentioned(textContent, userName)) {
-          targetGroup = tokensMentioned;
+      if (isPing && mentionedSomeoneElse && !isActuallyMentioned) {
+        return;
+      }
+
+      const targetGroup = isActuallyMentioned ? tokensMentioned : tokensGeneral;
+
+      const addTokens = (tokens) => {
+        if (Array.isArray(tokens)) {
+          tokens.forEach((t) => {
+            targetGroup.push(t);
+            tokenOwnerMap[t] = docId;
+          });
+        } else if (typeof tokens === "string") {
+          targetGroup.push(tokens);
+          tokenOwnerMap[tokens] = docId;
         }
-      }
+      };
 
-      const userId = docId;
-      
-      if (Array.isArray(userTokens)) {
-        userTokens.forEach(t => {
-          targetGroup.push(t);
-          tokenOwnerMap[t] = userId; 
-        });
-      } else if (typeof userTokens === "string") {
-        targetGroup.push(userTokens);
-        tokenOwnerMap[userTokens] = userId;
-      }
+      addTokens(userTokens);
     });
 
     const uniqueTokensMentioned = [...new Set(tokensMentioned)];
     const uniqueTokensGeneral = [...new Set(tokensGeneral)];
 
     // =====================================================
-    // 3️⃣ Config (DATA-ONLY PAYLOAD)
+    // 2️⃣ Konstruksi Payload (PURE DATA-ONLY)
     // =====================================================
-    
     const promises = [];
 
-    // --- BATCH 1: Ke User yang Di-Mention (PING Logic) ---
+    // --- BATCH 1: Notifikasi Khusus Mention ---
     if (uniqueTokensMentioned.length > 0) {
-      const bodyMentioned = `Menyebut anda : ${truncatedContent}`;
-      const androidChannelId = isPing ? "urgent_alert" : "chat_message"; // [FIX] chat_messages -> chat_message
-
-      const payloadMentioned = {
-        // [FIX] Bagian notification dihapus agar dihandle FE sepenuhnya
-        data: {
-          title: authorName,
-          body: bodyMentioned,
-          click_action: "FLUTTER_NOTIFICATION_CLICK",
-          companyId: companyId,
-          messageId: snap.id,
-          type: type,
-          authorId: authorId,
-          route: "chat_screen",
-          isPing: isPing ? "true" : "false",
-          channelId: androidChannelId, // FE bisa baca ini untuk local notification
-        },
-        android: {
-          priority: "high", // Tetap 'high' agar data cepat sampai
-        },
-        apns: {
-          payload: {
-            aps: {
-              contentAvailable: true, // Penting untuk background data fetch di iOS
-              mutableContent: true,
-            },
-          },
-        },
-      };
+      const cleanText =
+        textContent.replace(/@(?:\{[^}]+\}|[a-zA-Z0-9_]+)/, "").trim() ||
+        "menyebut anda";
+      const bodyMentioned = `Menyebut anda : ${truncate(cleanText, 100)}`;
+      const androidChannelId = isPing ? "urgent_alert" : "chat_message";
 
       promises.push(
         admin.messaging().sendEachForMulticast({
           tokens: uniqueTokensMentioned,
-          ...payloadMentioned,
+          // HANYA menggunakan 'data'. Jangan masukkan objek 'notification' di root atau di 'android'.
+          data: {
+            title: authorName,
+            body: bodyMentioned,
+            click_action: "FLUTTER_NOTIFICATION_CLICK",
+            companyId: companyId,
+            messageId: snap.id,
+            type: type,
+            authorId: authorId,
+            route: "chat",
+            isPing: isPing ? "true" : "false",
+            channelId: androidChannelId,
+          },
+          android: {
+            priority: "high", // Tetap high agar paket data sampai secepat mungkin
+            ttl: isPing ? 0 : 3600 * 1000,
+            // [FIX] Objek 'notification' dihapus agar tidak muncul double
+          },
+          apns: {
+            payload: {
+              aps: {
+                contentAvailable: true,
+                mutableContent: true,
+                // Di iOS, 'sound' di sini tidak memicu notifikasi sistem jika tidak ada objek alert,
+                // tapi membantu FE mengenali jenis suara yang harus diputar.
+                sound: isPing ? "critical.caf" : "default",
+              },
+            },
+          },
         })
       );
     }
 
-    // --- BATCH 2: Ke User General (Normal) ---
+    // --- BATCH 2: Notifikasi General ---
     if (uniqueTokensGeneral.length > 0) {
       let bodyGeneral = "";
+
       if (type === "text") {
-        if (mentionedSomeoneElse) {
-          bodyGeneral = `Menyebut ${mentionedSomeoneElse} : ${truncatedContent}`;
-        } else {
-          bodyGeneral = truncate(textContent, 100);
-        }
+        bodyGeneral = mentionedSomeoneElse
+          ? `Menyebut ${mentionedSomeoneElse} : ${truncate(textContent, 100)}`
+          : truncate(textContent, 100);
       } else if (type === "custom") {
-        if (message.subtype === "recording" || message.subtype === "voice") {
-          bodyGeneral = "🎤 Mengirim pesan suara";
-        } else {
-          bodyGeneral = "✨ Mengirim pesan baru";
-        }
+        const sub = message.subtype;
+        bodyGeneral =
+          sub === "recording" || sub === "voice"
+            ? "🎤 Mengirim pesan suara"
+            : "✨ Mengirim pesan baru";
       } else if (type === "file") {
         const mime = message.mimeType || "";
-        if (mime.startsWith("image/")) {
-          bodyGeneral = "📷 Mengirim foto";
-        } else if (mime.startsWith("video/")) {
-          bodyGeneral = "🎥 Mengirim video";
-        } else {
-          const fileName = message.fileName || "dokumen";
-          bodyGeneral = `📄 Mengirim file: ${truncate(fileName, 20)}`;
-        }
+        if (mime.startsWith("image/")) bodyGeneral = "📷 Mengirim foto";
+        else if (mime.startsWith("video/")) bodyGeneral = "🎥 Mengirim video";
+        else
+          bodyGeneral = `📄 File: ${truncate(
+            message.fileName || "Dokumen",
+            30
+          )}`;
       } else {
-        bodyGeneral = "📩 Mengirim pesan";
+        bodyGeneral = "📩 Pesan baru";
       }
-
-      const payloadGeneral = {
-        // [FIX] Bagian notification dihapus
-        data: {
-          title: authorName,
-          body: bodyGeneral,
-          click_action: "FLUTTER_NOTIFICATION_CLICK",
-          companyId: companyId,
-          messageId: snap.id,
-          type: type,
-          authorId: authorId,
-          route: "chat_screen",
-          channelId: "chat_message", // [FIX] chat_messages -> chat_message
-        },
-        android: {
-          priority: "high",
-        },
-        apns: {
-          payload: {
-            aps: {
-              contentAvailable: true,
-              mutableContent: true,
-            },
-          },
-        },
-      };
 
       promises.push(
         admin.messaging().sendEachForMulticast({
           tokens: uniqueTokensGeneral,
-          ...payloadGeneral,
+          data: {
+            title: authorName,
+            body: bodyGeneral,
+            click_action: "FLUTTER_NOTIFICATION_CLICK",
+            companyId: companyId,
+            messageId: snap.id,
+            type: type,
+            authorId: authorId,
+            route: "chat",
+            channelId: "chat_message",
+          },
+          android: {
+            priority: "high",
+            // [FIX] Objek 'notification' dihapus
+          },
+          apns: {
+            payload: { aps: { contentAvailable: true, mutableContent: true } },
+          },
         })
       );
     }
 
     // =====================================================
-    // 5️⃣ Eksekusi & Cleanup
+    // 3️⃣ Eksekusi & Cleanup
     // =====================================================
     if (promises.length === 0) return;
 
     try {
       const results = await Promise.all(promises);
-      
       let allResponses = [];
       let allTokens = [];
 
-      if (uniqueTokensMentioned.length > 0 && results[0]) {
-        allResponses = allResponses.concat(results[0].responses);
-        allTokens = allTokens.concat(uniqueTokensMentioned);
-      }
-
-      const generalResultIndex = uniqueTokensMentioned.length > 0 ? 1 : 0;
-      if (uniqueTokensGeneral.length > 0 && results[generalResultIndex]) {
-        allResponses = allResponses.concat(results[generalResultIndex].responses);
-        allTokens = allTokens.concat(uniqueTokensGeneral);
-      }
+      results.forEach((res, i) => {
+        allResponses = allResponses.concat(res.responses);
+        const sourceTokens =
+          i === 0 && uniqueTokensMentioned.length > 0
+            ? uniqueTokensMentioned
+            : uniqueTokensGeneral;
+        allTokens = allTokens.concat(sourceTokens);
+      });
 
       const cleanupPromises = [];
-      
       allResponses.forEach((resp, idx) => {
         if (!resp.success) {
-          const error = resp.error;
-          const badToken = allTokens[idx];
-          
+          const err = resp.error;
           if (
-            error.code === 'messaging/invalid-registration-token' ||
-            error.code === 'messaging/registration-token-not-registered'
+            err.code === "messaging/invalid-registration-token" ||
+            err.code === "messaging/registration-token-not-registered"
           ) {
-            const ownerId = tokenOwnerMap[badToken];
-            if (ownerId) {
-              const p = admin.firestore()
-                .collection("users")
-                .doc(ownerId)
-                .update({
-                  fcmTokens: FieldValue.arrayRemove(badToken)
-                })
-                .catch(err => console.error(`Failed cleanup ${ownerId}:`, err));
-              cleanupPromises.push(p);
+            const tokenToRem = allTokens[idx];
+            const userId = tokenOwnerMap[tokenToRem];
+            if (userId) {
+              cleanupPromises.push(
+                admin
+                  .firestore()
+                  .collection("users")
+                  .doc(userId)
+                  .update({
+                    fcmTokens: FieldValue.arrayRemove(tokenToRem),
+                  })
+                  .catch(() => {})
+              );
             }
           }
         }
       });
-
-      if (cleanupPromises.length > 0) {
-        await Promise.all(cleanupPromises);
-        console.log(`✨ Cleaned ${cleanupPromises.length} invalid tokens.`);
-      }
-
-    } catch (error) {
-      console.error("❌ Error sending notification:", error);
+      await Promise.all(cleanupPromises);
+    } catch (e) {
+      console.error("❌ FCM Master Error:", e);
     }
   }
 );
