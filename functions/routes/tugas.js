@@ -36,12 +36,12 @@ const prepareAttachment = async (idCompany, text, fileId, user) => {
   if (!text && !fileData) return null;
 
   const attachmentId = db.collection("_").doc().id;
-  
+
   return {
     id: attachmentId,
     type: fileData ? "file" : "text",
     text: text || "",
-    ...(fileData && { file: fileData }), 
+    ...(fileData && { file: fileData }),
     senderEmail: user.email,
     senderName: user.username || user.nama || "User",
     senderRole: user.role,
@@ -60,12 +60,7 @@ router.get("/list", verifyToken, async (req, res) => {
       .collection("companies")
       .doc(idCompany)
       .collection("tasks")
-      .orderBy("updatedAt", "desc"); 
-
-    if (role !== "admin") {
-      // PERUBAHAN 1: Menggunakan 'array-contains' karena assignedTo sekarang adalah Array
-      query = query.where("assignedTo", "array-contains", email);
-    }
+      .orderBy("updatedAt", "desc");
 
     const snapshot = await query.get();
 
@@ -77,23 +72,27 @@ router.get("/list", verifyToken, async (req, res) => {
 
     const tasks = snapshot.docs.map((doc) => {
       const data = doc.data();
-      
+
       // LOGIKA OVERDUE (Sama seperti sebelumnya)
       let isOverdue = false;
       let daysOverdue = 0;
-      let compareTime = now; 
+      let compareTime = now;
 
       if (data.deadline) {
         const deadlineDate = data.deadline.toDate();
 
-        if (data.status === 'Selesai') {
-            compareTime = data.finishedAt ? data.finishedAt.toDate() : (data.updatedAt ? data.updatedAt.toDate() : now);
+        if (data.status === "Selesai") {
+          compareTime = data.finishedAt
+            ? data.finishedAt.toDate()
+            : data.updatedAt
+            ? data.updatedAt.toDate()
+            : now;
         }
 
         if (compareTime > deadlineDate) {
-           isOverdue = true;
-           const diffTime = Math.abs(compareTime - deadlineDate);
-           daysOverdue = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+          isOverdue = true;
+          const diffTime = Math.abs(compareTime - deadlineDate);
+          daysOverdue = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
         }
       }
 
@@ -101,12 +100,11 @@ router.get("/list", verifyToken, async (req, res) => {
         id: doc.id,
         ...data,
         isOverdue: isOverdue,
-        overdueInfo: isOverdue ? `Terlambat ${daysOverdue} hari` : null, 
-        
+        overdueInfo: isOverdue ? `Terlambat ${daysOverdue} hari` : null,
         createdAt: data.createdAt?.toDate().toISOString(),
         updatedAt: data.updatedAt?.toDate().toISOString(),
-        finishedAt: data.finishedAt?.toDate().toISOString() || null, 
-        deadline: data.deadline?.toDate().toISOString() || null 
+        finishedAt: data.finishedAt?.toDate().toISOString() || null,
+        deadline: data.deadline?.toDate().toISOString() || null,
       };
     });
 
@@ -116,7 +114,9 @@ router.get("/list", verifyToken, async (req, res) => {
     });
   } catch (error) {
     console.error("Error Get List Task:", error);
-    return res.status(500).json({ message: "Server Error", error: error.message });
+    return res
+      .status(500)
+      .json({ message: "Server Error", error: error.message });
   }
 });
 
@@ -133,7 +133,7 @@ router.post("/create", verifyToken, async (req, res) => {
 
     // PERUBAHAN 2: assignedTo diharapkan berupa Array of Emails ["a@mail.com", "b@mail.com"]
     // Jika frontend mengirim string single, kita ubah jadi array.
-    let { assignedTo, description, deadline } = req.body; 
+    let { assignedTo, description, deadline } = req.body;
     const { idCompany, email: adminEmail, nama: adminName } = req.user;
 
     if (!assignedTo || !description) {
@@ -144,17 +144,19 @@ router.post("/create", verifyToken, async (req, res) => {
 
     // Handle jika user mengirim string (single user) untuk backward compatibility
     if (!Array.isArray(assignedTo)) {
-        assignedTo = [assignedTo];
+      assignedTo = [assignedTo];
     }
 
     // 1. Validasi Deadline
     let deadlineTimestamp = null;
     if (deadline) {
-       const dateCheck = new Date(deadline);
-       if (isNaN(dateCheck.getTime())) {
-          return res.status(400).json({ message: "Format deadline tidak valid. Gunakan ISO 8601." });
-       }
-       deadlineTimestamp = Timestamp.fromDate(dateCheck);
+      const dateCheck = new Date(deadline);
+      if (isNaN(dateCheck.getTime())) {
+        return res
+          .status(400)
+          .json({ message: "Format deadline tidak valid. Gunakan ISO 8601." });
+      }
+      deadlineTimestamp = Timestamp.fromDate(dateCheck);
     }
 
     // 2. Validasi & Fetch Multiple Users
@@ -164,41 +166,41 @@ router.post("/create", verifyToken, async (req, res) => {
 
     // Kita loop semua email yang dikirim
     for (const targetEmail of assignedTo) {
-        const targetUserRef = db.collection("users").doc(targetEmail);
-        const targetUserDoc = await targetUserRef.get();
+      const targetUserRef = db.collection("users").doc(targetEmail);
+      const targetUserDoc = await targetUserRef.get();
 
-        if (targetUserDoc.exists) {
-            const userData = targetUserDoc.data();
-            // Pastikan user ada di perusahaan yang sama
-            if (userData.idCompany === idCompany) {
-                targetEmails.push(targetEmail); // Masukkan ke Array Email
-                targetNames.push(userData.username || userData.nama || targetEmail); // Masukkan ke Array Nama
-                targetPhotos.push(userData.photoURL || null); // Masukkan ke Array Foto
-            }
+      if (targetUserDoc.exists) {
+        const userData = targetUserDoc.data();
+        // Pastikan user ada di perusahaan yang sama
+        if (userData.idCompany === idCompany) {
+          targetEmails.push(targetEmail); // Masukkan ke Array Email
+          targetNames.push(userData.username || userData.nama || targetEmail); // Masukkan ke Array Nama
+          targetPhotos.push(userData.photoURL || null); // Masukkan ke Array Foto
         }
+      }
     }
 
     if (targetEmails.length === 0) {
-        return res.status(404).json({
-            message: "Tidak ada user valid yang ditemukan dalam list assignedTo.",
-        });
+      return res.status(404).json({
+        message: "Tidak ada user valid yang ditemukan dalam list assignedTo.",
+      });
     }
 
     // 3. Buat Object Tugas dengan Array
     const newTask = {
       companyId: idCompany,
-      assignedTo: targetEmails,       // Array of Strings
-      assignedToName: targetNames,    // Array of Strings
-      assignedToPhoto: targetPhotos,  // Array of Strings/Null
+      assignedTo: targetEmails, // Array of Strings
+      assignedToName: targetNames, // Array of Strings
+      assignedToPhoto: targetPhotos, // Array of Strings/Null
       createdBy: adminEmail,
       description: description,
       status: "Proses",
       statusCode: 1,
       attachments: [],
-      
+
       deadline: deadlineTimestamp,
-      finishedAt: null, 
-      
+      finishedAt: null,
+
       createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
     };
@@ -211,7 +213,7 @@ router.post("/create", verifyToken, async (req, res) => {
 
     // 4. LOG AKTIVITAS (Join nama user jika banyak)
     const targetNamesString = targetNames.join(", ");
-    
+
     await logCompanyActivity(idCompany, {
       actorEmail: adminEmail,
       actorName: adminName || "Admin",
@@ -227,7 +229,7 @@ router.post("/create", verifyToken, async (req, res) => {
         id: docRef.id,
         ...newTask,
         createdAt: new Date().toISOString(),
-        deadline: deadline ? deadlineTimestamp.toDate().toISOString() : null
+        deadline: deadline ? deadlineTimestamp.toDate().toISOString() : null,
       },
     });
   } catch (error) {
@@ -246,8 +248,10 @@ router.post("/add-attachment", verifyToken, async (req, res) => {
     const { taskId, text, fileId } = req.body;
     const { idCompany, email, nama } = req.user;
 
-    if (!taskId) return res.status(400).json({ message: "Task ID wajib diisi." });
-    if (!text && !fileId) return res.status(400).json({ message: "Isi text atau fileId." });
+    if (!taskId)
+      return res.status(400).json({ message: "Task ID wajib diisi." });
+    if (!text && !fileId)
+      return res.status(400).json({ message: "Isi text atau fileId." });
 
     const taskRef = db
       .collection("companies")
@@ -260,10 +264,17 @@ router.post("/add-attachment", verifyToken, async (req, res) => {
       return res.status(404).json({ message: "Tugas tidak ditemukan." });
     }
 
-    const newAttachment = await prepareAttachment(idCompany, text, fileId, req.user);
-    
+    const newAttachment = await prepareAttachment(
+      idCompany,
+      text,
+      fileId,
+      req.user
+    );
+
     if (!newAttachment) {
-      return res.status(400).json({ message: "File tidak ditemukan atau input kosong." });
+      return res
+        .status(400)
+        .json({ message: "File tidak ditemukan atau input kosong." });
     }
 
     await taskRef.update({
@@ -303,14 +314,15 @@ router.post("/update-status", verifyToken, async (req, res) => {
     const { idCompany, email, role, nama } = req.user;
 
     const statusMap = {
-      "Proses": 1,
-      "Tunda": 2,
-      "Selesai": 3
+      Proses: 1,
+      Tunda: 2,
+      Selesai: 3,
     };
 
     if (!taskId || !status || !statusMap[status]) {
-      return res.status(400).json({ 
-        message: "Task ID dan Status (Proses, Tunda, Selesai) valid wajib diisi." 
+      return res.status(400).json({
+        message:
+          "Task ID dan Status (Proses, Tunda, Selesai) valid wajib diisi.",
       });
     }
 
@@ -331,78 +343,96 @@ router.post("/update-status", verifyToken, async (req, res) => {
     // VALIDASI AKSES: Cek apakah user yang request ada di list assignedTo
     // Jika user BUKAN admin, dan emailnya TIDAK ADA di array assignedTo, tolak.
     if (role !== "admin") {
-        // Handle kompatibilitas data lama (string) vs data baru (array)
-        const assignedToArray = Array.isArray(taskData.assignedTo) 
-            ? taskData.assignedTo 
-            : [taskData.assignedTo];
+      // Handle kompatibilitas data lama (string) vs data baru (array)
+      const assignedToArray = Array.isArray(taskData.assignedTo)
+        ? taskData.assignedTo
+        : [taskData.assignedTo];
 
-        if (!assignedToArray.includes(email)) {
-            return res.status(403).json({ message: "Anda tidak ditugaskan untuk tugas ini." });
-        }
+      if (!assignedToArray.includes(email)) {
+        return res
+          .status(403)
+          .json({ message: "Anda tidak ditugaskan untuk tugas ini." });
+      }
     }
 
     // VALIDASI LOGIKA STATUS
     if (currentStatus === "Proses" && status === "Tunda") {
-        // OK
-    }
-    else if (currentStatus === "Tunda" && status === "Proses") {
-        if (role !== "admin") {
-            return res.status(403).json({ message: "Hanya Admin yang dapat mengembalikan status ke Proses (Revisi)." });
-        }
-    }
-    else if (currentStatus === "Tunda" && status === "Selesai") {
-        if (role !== "admin") {
-            return res.status(403).json({ message: "Hanya Admin yang dapat menyelesaikan tugas." });
-        }
-    }
-    else if (currentStatus === status) {
-       // OK
-    }
-    else {
-        if (role !== "admin" && status === "Selesai") {
-             return res.status(403).json({ message: "Staff harus mengubah status ke Tunda (Review) terlebih dahulu." });
-        }
+      // OK
+    } else if (currentStatus === "Tunda" && status === "Proses") {
+      if (role !== "admin") {
+        return res
+          .status(403)
+          .json({
+            message:
+              "Hanya Admin yang dapat mengembalikan status ke Proses (Revisi).",
+          });
+      }
+    } else if (currentStatus === "Tunda" && status === "Selesai") {
+      if (role !== "admin") {
+        return res
+          .status(403)
+          .json({ message: "Hanya Admin yang dapat menyelesaikan tugas." });
+      }
+    } else if (currentStatus === status) {
+      // OK
+    } else {
+      if (role !== "admin" && status === "Selesai") {
+        return res
+          .status(403)
+          .json({
+            message:
+              "Staff harus mengubah status ke Tunda (Review) terlebih dahulu.",
+          });
+      }
     }
 
     const updateData = {
-        status: status,
-        statusCode: statusMap[status],
-        updatedAt: Timestamp.now(),
-        finishedAt: status === "Selesai" ? Timestamp.now() : null
+      status: status,
+      statusCode: statusMap[status],
+      updatedAt: Timestamp.now(),
+      finishedAt: status === "Selesai" ? Timestamp.now() : null,
     };
 
     let newAttachment = null;
     if (text || fileId) {
-        newAttachment = await prepareAttachment(idCompany, text, fileId, req.user);
-        if (newAttachment) {
-            updateData.attachments = FieldValue.arrayUnion(newAttachment);
-        }
+      newAttachment = await prepareAttachment(
+        idCompany,
+        text,
+        fileId,
+        req.user
+      );
+      if (newAttachment) {
+        updateData.attachments = FieldValue.arrayUnion(newAttachment);
+      }
     }
 
     await taskRef.update(updateData);
 
     await logCompanyActivity(idCompany, {
-        actorEmail: email,
-        actorName: nama || "User",
-        target: taskId,
-        action: "UPDATE_STATUS_TASK",
-        description: `Mengubah status dari ${currentStatus} ke ${status}.`,
+      actorEmail: email,
+      actorName: nama || "User",
+      target: taskId,
+      action: "UPDATE_STATUS_TASK",
+      description: `Mengubah status dari ${currentStatus} ke ${status}.`,
     });
 
     return res.status(200).json({
-        message: `Status berhasil diubah ke ${status}.`,
-        data: {
-            taskId,
-            status,
-            statusCode: statusMap[status],
-            finishedAt: updateData.finishedAt ? updateData.finishedAt.toDate().toISOString() : null,
-            addedAttachment: newAttachment
-        }
+      message: `Status berhasil diubah ke ${status}.`,
+      data: {
+        taskId,
+        status,
+        statusCode: statusMap[status],
+        finishedAt: updateData.finishedAt
+          ? updateData.finishedAt.toDate().toISOString()
+          : null,
+        addedAttachment: newAttachment,
+      },
     });
-
   } catch (error) {
     console.error("Error Update Status:", error);
-    return res.status(500).json({ message: "Server Error", error: error.message });
+    return res
+      .status(500)
+      .json({ message: "Server Error", error: error.message });
   }
 });
 
