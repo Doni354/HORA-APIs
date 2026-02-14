@@ -2,9 +2,8 @@
 const express = require("express");
 const ExcelJS = require("exceljs");
 const { db } = require("../config/firebase");
-
 const router = express.Router();
-
+const { ExcelFormatter, ExcelTemplate, COLORS } = require("../helper/excel");
 // Ganti sesuai domain API kamu yang sebenarnya agar link di email bisa diklik
 const BASE_URL = "https://api-y4ntpb3uvq-et.a.run.app/api/arsip";
 
@@ -80,11 +79,9 @@ router.get("/Kinerja", async (req, res) => {
 
     // 2. Validation
     if (!idperusahaan || !month) {
-      return res
-        .status(400)
-        .json({
-          message: "Missing required parameters: idperusahaan, month (YYYY-MM)",
-        });
+      return res.status(400).json({
+        message: "Missing required parameters: idperusahaan, month (YYYY-MM)",
+      });
     }
 
     // 3. Parse Date Range (Start of Month - End of Month)
@@ -511,91 +508,135 @@ router.get("/export/laporan", async (req, res) => {
 router.get("/export/kehadiran", async (req, res) => {
   try {
     const { idperusahaan, tglstart, tglend } = req.query;
+    if (!idperusahaan || !tglstart || !tglend) return res.status(400).send("Parameter tidak lengkap");
 
-    if (!idperusahaan || !tglstart || !tglend) {
-      return res.status(400).send("Parameter tidak lengkap");
-    }
+    const companyDoc = await db.collection("companies").doc(idperusahaan).get();
+    if (!companyDoc.exists) return res.status(404).send("Perusahaan tidak ditemukan");
+    
+    const cData = companyDoc.data();
+    const namaPT = cData.namaPerusahaan || idperusahaan;
+    const emailAdmin = cData.createdBy || cData.email || "hr@sms.id";
 
     const startDate = new Date(tglstart);
     const endDate = new Date(tglend);
+    if (tglend.length <= 10) endDate.setHours(23, 59, 59, 999);
 
-    const snapshot = await db
-      .collection("companies")
-      .doc(idperusahaan)
-      .collection("absensi")
+    const snapshot = await db.collection("companies").doc(idperusahaan).collection("absensi")
       .where("tanggal", ">=", startDate)
       .where("tanggal", "<=", endDate)
-      .orderBy("tanggal", "desc")
-      .get();
+      .orderBy("tanggal", "asc").get();
 
     const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet("Laporan Kehadiran");
+    const ws = workbook.addWorksheet("Arsip Kehadiran");
 
-    worksheet.columns = [
-      { header: "No", key: "no", width: 5 },
-      { header: "Nama Karyawan", key: "nama", width: 25 },
-      { header: "Hari/Tanggal", key: "tanggal", width: 25 },
-      { header: "Jam Masuk", key: "in", width: 15 },
-      { header: "Foto Masuk", key: "fotoIn", width: 15 },
-      { header: "Jam Pulang", key: "out", width: 15 },
-      { header: "Foto Pulang", key: "fotoOut", width: 15 },
-      { header: "Durasi (JJ:MM:DD)", key: "durasi", width: 20 },
-    ];
-    worksheet.getRow(1).font = { bold: true };
+    // Waktu Lokal User (Asia/Jakarta)
+    const now = new Date();
+    const exportDateStr = now.toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta" });
+    const exportTimeStr = now.toLocaleTimeString("id-ID", { 
+      timeZone: "Asia/Jakarta", hour: '2-digit', minute: '2-digit', hour12: false 
+    }).replace(/\./g, ":");
 
-    let index = 1;
+    // 1. Header Informasi (A1-C7)
+    ExcelTemplate.buildHeaderInfo(ws, [
+      `Arsip hadir PT. ${namaPT}`,
+      startDate.toLocaleDateString("id-ID"),
+      endDate.toLocaleDateString("id-ID"),
+      "VORCE",
+      emailAdmin,
+      exportDateStr,
+      exportTimeStr,
+    ]);
+
+    const RINCIAN_LABELS = ["Shift", "Masuk", "Pulang", "Durasi", "Cekin", "Cekout", "Lokasi"];
+
+    // 2. Grouping Data per Karyawan
+    const employeeMap = new Map();
     snapshot.forEach((doc) => {
-      const data = doc.data();
-      const row = worksheet.addRow({
-        no: index++,
-        nama: data.namaKaryawan || "-",
-        tanggal: formatDateIndo(data.tanggal),
-        in: formatTime(data.waktuCheckIn),
-        fotoIn: data.fotoCheckIn ? "Link" : "-",
-        out: formatTime(data.waktuCheckOut),
-        fotoOut: data.fotoCheckOut ? "Link" : "-",
-        durasi: calculateDuration(data.waktuCheckIn, data.waktuCheckOut),
-      });
-      if (data.fotoCheckIn) {
-        row.getCell("fotoIn").value = {
-          text: "Lihat",
-          hyperlink: data.fotoCheckIn,
-        };
-        row.getCell("fotoIn").font = {
-          color: { argb: "FF0000FF" },
-          underline: true,
-        };
-      }
-      if (data.fotoCheckOut) {
-        row.getCell("fotoOut").value = {
-          text: "Lihat",
-          hyperlink: data.fotoCheckOut,
-        };
-        row.getCell("fotoOut").font = {
-          color: { argb: "FF0000FF" },
-          underline: true,
-        };
-      }
+      const d = doc.data();
+      const nama = d.namaKaryawan || "Tanpa Nama";
+      if (!employeeMap.has(nama)) employeeMap.set(nama, []);
+      employeeMap.get(nama).push(d);
     });
 
-    // STREAM DOWNLOAD LANGSUNG
-    res.setHeader(
-      "Content-Type",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    );
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename=Laporan_Kehadiran_${idperusahaan}.xlsx`
-    );
+    let currentRow = 9;
+
+    // 3. Konten Karyawan
+    employeeMap.forEach((absensiList, namaKaryawan) => {
+      if (currentRow > 9) currentRow += 1; // Gap baris kosong antar karyawan
+
+      ExcelTemplate.buildTableGridHeader(ws, currentRow);
+      const dataStartRow = currentRow + 2;
+
+      // Nama (A)
+      const lastRowOfEmp = dataStartRow + 6;
+      ws.mergeCells(`A${dataStartRow}:A${lastRowOfEmp}`);
+      const nameCell = ws.getCell(`A${dataStartRow}`);
+      nameCell.value = namaKaryawan;
+      ExcelFormatter.setCellStyle(nameCell, COLORS.PURPLE, COLORS.WHITE, "center");
+
+      // Label Rincian (B)
+      RINCIAN_LABELS.forEach((label, idx) => {
+        const rincianCell = ws.getCell(dataStartRow + idx, 2);
+        rincianCell.value = label;
+        ExcelFormatter.setCellStyle(rincianCell, COLORS.PURPLE, COLORS.WHITE, "left");
+      });
+
+      // Data Absensi per Tanggal
+      absensiList.forEach((data) => {
+        const dateObj = data.tanggal.toDate ? data.tanggal.toDate() : new Date(data.tanggal);
+        const day = dateObj.getDate();
+        if (day < 1 || day > 31) return;
+        
+        const col = 2 + day;
+        const durasiFormatted = data.durasi ? ExcelFormatter.formatDuration(data.durasi) : "-";
+
+        const rowData = [
+          { val: data.shift },
+          { val: ExcelFormatter.formatToAMPM(data.waktuCheckIn) },
+          { val: ExcelFormatter.formatToAMPM(data.waktuCheckOut) },
+          { val: durasiFormatted },
+          { val: data.fotoCheckIn ? "Buka" : "-", isLink: !!data.fotoCheckIn, link: data.fotoCheckIn },
+          { val: data.fotoCheckOut ? "Buka" : "-", isLink: !!data.fotoCheckOut, link: data.fotoCheckOut },
+          { 
+            val: (data.alamatLatitude || data.alamatLoc) ? "Buka" : "-", 
+            isLink: !!(data.alamatLatitude && data.alamatLongtitude), 
+            link: `https://www.google.com/maps?q=${data.alamatLatitude},${data.alamatLongtitude}` 
+          },
+        ];
+
+        rowData.forEach((item, idx) => {
+          const cell = ws.getCell(dataStartRow + idx, col);
+          ExcelFormatter.applyDataCellStyle(cell, item.val, item.isLink, item.link);
+        });
+      });
+
+      // Isi cell kosong dengan "-"
+      for (let d = 1; d <= 31; d++) {
+        const col = 2 + d;
+        for (let idx = 0; idx < 7; idx++) {
+          const cell = ws.getCell(dataStartRow + idx, col);
+          if (!cell.value) ExcelFormatter.applyDataCellStyle(cell, "-");
+        }
+      }
+
+      currentRow = lastRowOfEmp + 1;
+    });
+
+    // Sentuhan Akhir: Auto-lebar kolom & Ketinggian baris fixed (0.5cm)
+    ExcelFormatter.adjustColumnWidth(ws);
+    ExcelFormatter.fixRowHeights(ws);
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename=Arsip_Kehadiran_${namaPT.replace(/\s+/g, '_')}.xlsx`);
 
     await workbook.xlsx.write(res);
     res.end();
+
   } catch (e) {
-    console.error("Export Kehadiran error:", e);
-    res.status(500).send("Gagal download excel");
+    console.error("Export Error Detail:", e);
+    res.status(500).send(`Gagal download excel: ${e.message}`);
   }
 });
-
 
 
 // ---------------------------------------------------------
@@ -646,11 +687,11 @@ router.get("/statreimburse", async (req, res) => {
     if (!snapshot.empty) {
       reportData = snapshot.docs.map((doc) => {
         const data = doc.data();
-        
+
         // Hitung total (Hanya yang Lunas atau Tunggakan, yang Ditolak/Code 2 tidak dihitung)
         // Code 2 = Ditolak, Code 1 = Lunas, Code 0 = Tunggakan
         if (data.statusCode !== 2) {
-            totalPengeluaran += (Number(data.amount) || 0);
+          totalPengeluaran += Number(data.amount) || 0;
         }
 
         return {
@@ -661,10 +702,10 @@ router.get("/statreimburse", async (req, res) => {
           status: data.status || "-",
           statusCode: data.statusCode,
           evidence: data.evidence ? data.evidence.fileUrl : null,
-          
+
           // UPDATED: Ambil data kategori dan alamat
           category: data.category || "Umum",
-          address: data.address || "-"
+          address: data.address || "-",
         };
       });
     }
@@ -680,7 +721,7 @@ router.get("/statreimburse", async (req, res) => {
         // Warna status
         let statusColor = "#555";
         if (row.statusCode === 1) statusColor = "green"; // Lunas
-        if (row.statusCode === 2) statusColor = "red";   // Ditolak
+        if (row.statusCode === 2) statusColor = "red"; // Ditolak
         if (row.statusCode === 0) statusColor = "#d35400"; // Tunggakan
 
         tableRows += `
@@ -688,25 +729,33 @@ router.get("/statreimburse", async (req, res) => {
             <td style="padding: 8px;">${index + 1}</td>
             <td style="padding: 8px;">${formatDateIndo(row.date)}</td>
             <td style="padding: 8px;">${row.requestByName}</td>
-            <td style="padding: 8px;">${row.category}</td> <!-- UPDATED: Kolom Kategori -->
+            <td style="padding: 8px;">${
+              row.category
+            }</td> <!-- UPDATED: Kolom Kategori -->
             <td style="padding: 8px;">
                 ${row.title}
                 <br>
-                <small style="color: #777; font-size: 11px;">${row.address}</small> <!-- UPDATED: Alamat dibawah judul -->
+                <small style="color: #777; font-size: 11px;">${
+                  row.address
+                }</small> <!-- UPDATED: Alamat dibawah judul -->
             </td>
             <td style="padding: 8px;">${formatRupiah(row.amount)}</td>
-            <td style="padding: 8px; font-weight: bold; color: ${statusColor};">${row.status}</td>
+            <td style="padding: 8px; font-weight: bold; color: ${statusColor};">${
+          row.status
+        }</td>
             <td style="padding: 8px;">${buktiLink}</td>
           </tr>`;
       });
-      
+
       // Tambahkan baris Total
       // Colspan disesuaikan: Total 8 kolom (No, Tgl, Nama, Kat, Judul, Jml, Sts, Bukti)
       // Label "Total" memakan 5 kolom pertama
       tableRows += `
         <tr style="background-color: #f9f9f9; font-weight: bold;">
             <td colspan="5" style="padding: 10px; text-align: right;">Total (Disetujui/Pending):</td>
-            <td colspan="3" style="padding: 10px;">${formatRupiah(totalPengeluaran)}</td>
+            <td colspan="3" style="padding: 10px;">${formatRupiah(
+              totalPengeluaran
+            )}</td>
         </tr>
       `;
     } else {
@@ -721,7 +770,9 @@ router.get("/statreimburse", async (req, res) => {
       <div style="font-family: Arial, sans-serif; color: #333;">
         <h2 style="color: #2c3e50;">Laporan Reimburse</h2>
         <p>Perusahaan: <strong>${namaPerusahaanDisplay}</strong></p>
-        <p>Periode: ${formatDateIndo(startDate)} s/d ${formatDateIndo(endDate)}</p>
+        <p>Periode: ${formatDateIndo(startDate)} s/d ${formatDateIndo(
+      endDate
+    )}</p>
         
         <div style="margin: 20px 0;">
           <a href="${exportLink}" target="_blank" 
@@ -800,7 +851,7 @@ router.get("/export/reimburse", async (req, res) => {
       { header: "Nama Karyawan", key: "nama", width: 25 },
       { header: "Kategori", key: "category", width: 20 }, // NEW: Kolom Kategori
       { header: "Judul Pengajuan", key: "title", width: 30 },
-      { header: "Alamat", key: "address", width: 30 },   // NEW: Kolom Alamat
+      { header: "Alamat", key: "address", width: 30 }, // NEW: Kolom Alamat
       { header: "Deskripsi", key: "desc", width: 35 },
       { header: "Jumlah (Rp)", key: "amount", width: 20 },
       { header: "Status", key: "status", width: 15 },
@@ -819,7 +870,7 @@ router.get("/export/reimburse", async (req, res) => {
         nama: data.requestByName || data.requestByEmail || "-",
         category: data.category || "Umum", // NEW
         title: data.title || "-",
-        address: data.address || "-",       // NEW
+        address: data.address || "-", // NEW
         desc: data.description || "-",
         amount: data.amount || 0,
         status: data.status || "Tunggakan",
@@ -906,19 +957,19 @@ router.get("/stattugas", async (req, res) => {
     if (!snapshot.empty) {
       reportData = snapshot.docs.map((doc) => {
         const data = doc.data();
-        
+
         // Handle Multi-Assign (Array to String)
         let assignedNames = "-";
         if (Array.isArray(data.assignedToName)) {
-            assignedNames = data.assignedToName.join(", ");
+          assignedNames = data.assignedToName.join(", ");
         } else if (data.assignedToName) {
-            assignedNames = data.assignedToName; // Fallback data lama
+          assignedNames = data.assignedToName; // Fallback data lama
         }
 
         // Cek Overdue Sederhana
         let isOverdue = false;
         if (data.deadline && data.status !== "Selesai") {
-            if (new Date() > data.deadline.toDate()) isOverdue = true;
+          if (new Date() > data.deadline.toDate()) isOverdue = true;
         }
 
         return {
@@ -928,7 +979,7 @@ router.get("/stattugas", async (req, res) => {
           status: data.status || "Proses",
           deadline: data.deadline || null,
           finishedAt: data.finishedAt || null,
-          isOverdue: isOverdue
+          isOverdue: isOverdue,
         };
       });
     }
@@ -941,7 +992,7 @@ router.get("/stattugas", async (req, res) => {
         let statusColor = "#f39c12"; // Proses (Orange)
         if (row.status === "Selesai") statusColor = "green";
         if (row.status === "Tunda") statusColor = "#c0392b"; // Merah
-        
+
         // Warna text jika overdue
         const dateColor = row.isOverdue ? "red" : "#333";
 
@@ -971,7 +1022,9 @@ router.get("/stattugas", async (req, res) => {
       <div style="font-family: Arial, sans-serif; color: #333;">
         <h2 style="color: #2c3e50;">Laporan Tugas Karyawan</h2>
         <p>Perusahaan: <strong>${namaPerusahaanDisplay}</strong></p>
-        <p>Periode: ${formatDateIndo(startDate)} s/d ${formatDateIndo(endDate)}</p>
+        <p>Periode: ${formatDateIndo(startDate)} s/d ${formatDateIndo(
+      endDate
+    )}</p>
         
         <div style="margin: 20px 0;">
           <a href="${exportLink}" target="_blank" 
@@ -1054,7 +1107,7 @@ router.get("/export/tugas", async (req, res) => {
       { header: "Selesai Pada", key: "finishedAt", width: 15 },
       { header: "Keterangan", key: "note", width: 20 }, // Untuk info telat
     ];
-    
+
     // Header Style
     worksheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
     worksheet.getRow(1).fill = {
@@ -1070,29 +1123,37 @@ router.get("/export/tugas", async (req, res) => {
       // Handle Array Names
       let assignedNames = "-";
       if (Array.isArray(data.assignedToName)) {
-          assignedNames = data.assignedToName.join(", ");
+        assignedNames = data.assignedToName.join(", ");
       } else if (data.assignedToName) {
-          assignedNames = data.assignedToName;
+        assignedNames = data.assignedToName;
       }
 
       // Logic Overdue
       let note = "-";
-      const deadlineDate = data.deadline ? (data.deadline.toDate ? data.deadline.toDate() : new Date(data.deadline)) : null;
-      const finishedDate = data.finishedAt ? (data.finishedAt.toDate ? data.finishedAt.toDate() : new Date(data.finishedAt)) : null;
-      
+      const deadlineDate = data.deadline
+        ? data.deadline.toDate
+          ? data.deadline.toDate()
+          : new Date(data.deadline)
+        : null;
+      const finishedDate = data.finishedAt
+        ? data.finishedAt.toDate
+          ? data.finishedAt.toDate()
+          : new Date(data.finishedAt)
+        : null;
+
       // Jika sudah selesai, cek apakah telat selesainya
       if (data.status === "Selesai" && deadlineDate && finishedDate) {
-          if (finishedDate > deadlineDate) {
-              note = "Terlambat Selesai";
-          } else {
-              note = "Tepat Waktu";
-          }
-      } 
+        if (finishedDate > deadlineDate) {
+          note = "Terlambat Selesai";
+        } else {
+          note = "Tepat Waktu";
+        }
+      }
       // Jika belum selesai dan deadline sudah lewat
       else if (data.status !== "Selesai" && deadlineDate) {
-          if (new Date() > deadlineDate) {
-              note = "OVERDUE (Terlambat)";
-          }
+        if (new Date() > deadlineDate) {
+          note = "OVERDUE (Terlambat)";
+        }
       }
 
       const row = worksheet.addRow({
@@ -1103,13 +1164,13 @@ router.get("/export/tugas", async (req, res) => {
         deadline: formatDateIndo(data.deadline),
         status: data.status || "Proses",
         finishedAt: formatDateIndo(data.finishedAt),
-        note: note
+        note: note,
       });
 
       // Highlight warna merah jika Overdue
       if (note.includes("Terlambat") || note.includes("OVERDUE")) {
-          row.getCell("note").font = { color: { argb: "FFFF0000" }, bold: true }; // Merah
-          row.getCell("deadline").font = { color: { argb: "FFFF0000" } };
+        row.getCell("note").font = { color: { argb: "FFFF0000" }, bold: true }; // Merah
+        row.getCell("deadline").font = { color: { argb: "FFFF0000" } };
       }
     });
 
@@ -1139,24 +1200,25 @@ router.post("/upgrade-resource", async (req, res) => {
   try {
     // A. Security Check (API Key)
     // Ambil dari Header (x-api-key) atau Body (secretKey)
-    const apiKey = req.headers['x-api-key'] || req.body.secretKey;
+    const apiKey = req.headers["x-api-key"] || req.body.secretKey;
     const SYSTEM_KEY = process.env.INTERNAL_API_KEY || "vorce-secret-key-123"; // Ganti di .env production
 
     if (apiKey !== SYSTEM_KEY) {
-        return res.status(403).json({ message: "Forbidden: Invalid API Key" });
+      return res.status(403).json({ message: "Forbidden: Invalid API Key" });
     }
 
     // B. Parse Data
     const { idCompany, maxStorage, maxKaryawan } = req.body;
 
-    if (!idCompany) return res.status(400).json({ message: "ID Company required" });
+    if (!idCompany)
+      return res.status(400).json({ message: "ID Company required" });
 
     const updates = {};
     if (maxStorage !== undefined) updates.maxStorage = parseInt(maxStorage); // Pastikan angka (Bytes)
     if (maxKaryawan !== undefined) updates.maxKaryawan = parseInt(maxKaryawan); // Pastikan angka
 
     if (Object.keys(updates).length === 0) {
-        return res.status(400).json({ message: "No data to update" });
+      return res.status(400).json({ message: "No data to update" });
     }
 
     // C. Update Firestore
@@ -1164,52 +1226,63 @@ router.post("/upgrade-resource", async (req, res) => {
 
     // D. Log System Activity
     await logCompanyActivity(idCompany, {
-        actorEmail: "payment-gateway@vorce.io",
-        actorName: "System Payment",
-        target: idCompany,
-        action: "UPGRADE_RESOURCE",
-        description: `Upgrade Resource via API. Storage: ${maxStorage || '-'}, Karyawan: ${maxKaryawan || '-'}`
+      actorEmail: "payment-gateway@vorce.io",
+      actorName: "System Payment",
+      target: idCompany,
+      action: "UPGRADE_RESOURCE",
+      description: `Upgrade Resource via API. Storage: ${
+        maxStorage || "-"
+      }, Karyawan: ${maxKaryawan || "-"}`,
     });
 
     // E. Kirim Notifikasi Email ke Owner
     // Ambil email owner dari data company
     const compDoc = await db.collection("companies").doc(idCompany).get();
     if (compDoc.exists) {
-        const compData = compDoc.data();
-        const ownerEmail = compData.createdBy; 
-        
-        if (ownerEmail) {
-             // Tulis ke collection 'mail' untuk trigger extension
-             await db.collection("mail").add({
-                to: ownerEmail,
-                message: {
-                  subject: `Upgrade Paket Berhasil - ${compData.namaPerusahaan}`,
-                  html: `
+      const compData = compDoc.data();
+      const ownerEmail = compData.createdBy;
+
+      if (ownerEmail) {
+        // Tulis ke collection 'mail' untuk trigger extension
+        await db.collection("mail").add({
+          to: ownerEmail,
+          message: {
+            subject: `Upgrade Paket Berhasil - ${compData.namaPerusahaan}`,
+            html: `
                     <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
                         <h2 style="color: #4f46e5;">Upgrade Berhasil!</h2>
                         <p>Halo Admin <b>${compData.namaPerusahaan}</b>,</p>
                         <p>Paket layanan Anda telah berhasil diperbarui oleh sistem kami.</p>
                         <div style="background: #f3f4f6; padding: 15px; border-radius: 8px; margin: 15px 0;">
                             <ul style="margin: 0; padding-left: 20px;">
-                                <li><b>Max Storage:</b> ${maxStorage ? (maxStorage/1024/1024).toFixed(0) + ' MB' : 'Tidak Berubah'}</li>
-                                <li><b>Max Karyawan:</b> ${maxKaryawan ? maxKaryawan + ' Orang' : 'Tidak Berubah'}</li>
+                                <li><b>Max Storage:</b> ${
+                                  maxStorage
+                                    ? (maxStorage / 1024 / 1024).toFixed(0) +
+                                      " MB"
+                                    : "Tidak Berubah"
+                                }</li>
+                                <li><b>Max Karyawan:</b> ${
+                                  maxKaryawan
+                                    ? maxKaryawan + " Orang"
+                                    : "Tidak Berubah"
+                                }</li>
                             </ul>
                         </div>
                         <p>Selamat menikmati layanan Vorce dengan kapasitas lebih besar.</p>
                     </div>
-                  `
-                }
-             });
-        }
+                  `,
+          },
+        });
+      }
     }
 
-    return res.status(200).json({ message: "Success updating resources", data: updates });
-
+    return res
+      .status(200)
+      .json({ message: "Success updating resources", data: updates });
   } catch (e) {
     console.error("Upgrade API Error:", e);
     return res.status(500).json({ message: "Server Error" });
   }
 });
-
 
 module.exports = router;
