@@ -28,6 +28,7 @@ exports.onNewCompanyMessage = onDocumentCreated(
 
     const message = snap.data();
     const { companyId } = event.params;
+    const messageId = snap.id;
 
     const authorId = message.authorId;
     const authorEmail = message.authorEmail;
@@ -118,41 +119,50 @@ exports.onNewCompanyMessage = onDocumentCreated(
 
     // --- BATCH 1: Notifikasi Khusus Mention ---
     if (uniqueTokensMentioned.length > 0) {
-      const cleanText =
-        textContent.replace(/@(?:\{[^}]+\}|[a-zA-Z0-9_]+)/, "").trim() ||
-        "menyebut anda";
-      const bodyMentioned = `Menyebut anda : ${truncate(cleanText, 100)}`;
+      // Logika baru untuk menentukan isi body notifikasi
+      let bodyMentioned;
+
+      if (isPing) {
+        // Jika isPing true, langsung kirim teks PING!!!
+        bodyMentioned = "PING!!!";
+      } else {
+        // Jika hanya mention biasa, gunakan format "Menyebut anda"
+        const cleanText =
+          textContent.replace(/@(?:\{[^}]+\}|[a-zA-Z0-9_]+)/, "").trim() ||
+          "Menyebut anda";
+        bodyMentioned = `Menyebut anda : ${truncate(cleanText, 100)}`;
+      }
+
       const androidChannelId = isPing ? "urgent_alert" : "chat_message";
 
       promises.push(
         admin.messaging().sendEachForMulticast({
           tokens: uniqueTokensMentioned,
-          // HANYA menggunakan 'data'. Jangan masukkan objek 'notification' di root atau di 'android'.
           data: {
             title: authorName,
             body: bodyMentioned,
             click_action: "FLUTTER_NOTIFICATION_CLICK",
             companyId: companyId,
-            messageId: snap.id,
+            messageId: messageId,
             type: type,
             authorId: authorId,
-            route: "chat",
+            authorName: authorName,
+            route: "/chat",
             isPing: isPing ? "true" : "false",
             channelId: androidChannelId,
+            groupKey: `com.app.chat.${companyId}`,
           },
           android: {
-            priority: "high", // Tetap high agar paket data sampai secepat mungkin
+            priority: "high",
             ttl: isPing ? 0 : 3600 * 1000,
-            // [FIX] Objek 'notification' dihapus agar tidak muncul double
           },
           apns: {
             payload: {
               aps: {
                 contentAvailable: true,
                 mutableContent: true,
-                // Di iOS, 'sound' di sini tidak memicu notifikasi sistem jika tidak ada objek alert,
-                // tapi membantu FE mengenali jenis suara yang harus diputar.
                 sound: isPing ? "critical.caf" : "default",
+                threadId: companyId,
               },
             },
           },
@@ -195,18 +205,25 @@ exports.onNewCompanyMessage = onDocumentCreated(
             body: bodyGeneral,
             click_action: "FLUTTER_NOTIFICATION_CLICK",
             companyId: companyId,
-            messageId: snap.id,
+            messageId: messageId,
             type: type,
             authorId: authorId,
-            route: "chat",
+            authorName: authorName,
+            route: "/chat",
             channelId: "chat_message",
+            groupKey: `com.app.chat.${companyId}`,
           },
           android: {
             priority: "high",
-            // [FIX] Objek 'notification' dihapus
           },
           apns: {
-            payload: { aps: { contentAvailable: true, mutableContent: true } },
+            payload: {
+              aps: {
+                contentAvailable: true,
+                mutableContent: true,
+                threadId: companyId,
+              },
+            },
           },
         })
       );
