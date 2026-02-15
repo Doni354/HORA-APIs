@@ -434,8 +434,9 @@ router.get("/export/laporan", async (req, res) => {
 
     // 1. Ambil Data Perusahaan
     const companyDoc = await db.collection("companies").doc(idperusahaan).get();
-    if (!companyDoc.exists) return res.status(404).send("Perusahaan tidak ditemukan");
-    
+    if (!companyDoc.exists)
+      return res.status(404).send("Perusahaan tidak ditemukan");
+
     const cData = companyDoc.data();
     const namaPT = cData.namaPerusahaan || idperusahaan;
     const emailAdmin = cData.createdBy || cData.email || "hr@sms.id";
@@ -449,8 +450,8 @@ router.get("/export/laporan", async (req, res) => {
       .collection("companies")
       .doc(idperusahaan)
       .collection("leaves")
-      .where("status", "==", "approved") 
-      .where("startDate", "<=", endDateFilter) 
+      .where("status", "==", "approved")
+      .where("startDate", "<=", endDateFilter)
       .get();
 
     // 3. Grouping Data: Map<Nama, Map<Tanggal, { tipe, link }>>
@@ -459,9 +460,13 @@ router.get("/export/laporan", async (req, res) => {
     snapshot.forEach((doc) => {
       const data = doc.data();
       const nama = data.userName || data.userId || "Tanpa Nama";
-      
-      const startIzin = data.startDate?.toDate ? data.startDate.toDate() : new Date(data.startDate);
-      const endIzin = data.endDate?.toDate ? data.endDate.toDate() : new Date(data.endDate);
+
+      const startIzin = data.startDate?.toDate
+        ? data.startDate.toDate()
+        : new Date(data.startDate);
+      const endIzin = data.endDate?.toDate
+        ? data.endDate.toDate()
+        : new Date(data.endDate);
 
       if (!leavesMap.has(nama)) leavesMap.set(nama, {});
 
@@ -471,7 +476,7 @@ router.get("/export/laporan", async (req, res) => {
           const day = current.getDate();
           leavesMap.get(nama)[day] = {
             tipe: data.tipeIzin || "Izin",
-            link: data.attachmentUrl || null
+            link: data.attachmentUrl || null,
           };
         }
         current.setDate(current.getDate() + 1);
@@ -482,10 +487,17 @@ router.get("/export/laporan", async (req, res) => {
     const ws = workbook.addWorksheet("Arsip Perizinan");
 
     const now = new Date();
-    const exportDateStr = now.toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta" });
-    const exportTimeStr = now.toLocaleTimeString("id-ID", { 
-      timeZone: "Asia/Jakarta", hour: '2-digit', minute: '2-digit', hour12: false 
-    }).replace(/\./g, ":");
+    const exportDateStr = now.toLocaleDateString("id-ID", {
+      timeZone: "Asia/Jakarta",
+    });
+    const exportTimeStr = now
+      .toLocaleTimeString("id-ID", {
+        timeZone: "Asia/Jakarta",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      })
+      .replace(/\./g, ":");
 
     // 4. Build Header Informasi (A1-C7)
     ExcelTemplate.buildHeaderInfo(ws, [
@@ -503,7 +515,7 @@ router.get("/export/laporan", async (req, res) => {
 
     // 5. Loop Setiap Karyawan
     leavesMap.forEach((daysData, namaKaryawan) => {
-      if (currentRow > 9) currentRow += 1; 
+      if (currentRow > 9) currentRow += 1;
 
       ExcelTemplate.buildTableGridHeader(ws, currentRow);
       const dataStartRow = currentRow + 2;
@@ -512,12 +524,22 @@ router.get("/export/laporan", async (req, res) => {
       ws.mergeCells(`A${dataStartRow}:A${lastRowOfEmp}`);
       const nameCell = ws.getCell(`A${dataStartRow}`);
       nameCell.value = namaKaryawan;
-      ExcelFormatter.setCellStyle(nameCell, COLORS.PURPLE, COLORS.WHITE, "center");
+      ExcelFormatter.setCellStyle(
+        nameCell,
+        COLORS.PURPLE,
+        COLORS.WHITE,
+        "center"
+      );
 
       RINCIAN_LABELS.forEach((label, idx) => {
         const rincianCell = ws.getCell(dataStartRow + idx, 2);
         rincianCell.value = label;
-        ExcelFormatter.setCellStyle(rincianCell, COLORS.PURPLE, COLORS.WHITE, "left");
+        ExcelFormatter.setCellStyle(
+          rincianCell,
+          COLORS.PURPLE,
+          COLORS.WHITE,
+          "left"
+        );
       });
 
       // Isi Data 1 - 31
@@ -529,17 +551,32 @@ router.get("/export/laporan", async (req, res) => {
         const cellTipe = ws.getCell(dataStartRow, col);
         cellTipe.value = leaveData ? leaveData.tipe : "-";
         // Rule: Selalu Putih untuk Arsip Perizinan
-        ExcelFormatter.setCellStyle(cellTipe, COLORS.WHITE, COLORS.BLACK, "center");
+        ExcelFormatter.setCellStyle(
+          cellTipe,
+          COLORS.WHITE,
+          COLORS.BLACK,
+          "center"
+        );
 
         // Baris Lampiran
         const cellLink = ws.getCell(dataStartRow + 1, col);
         if (leaveData && leaveData.link) {
           cellLink.value = { text: "Buka", hyperlink: leaveData.link };
-          ExcelFormatter.setCellStyle(cellLink, COLORS.WHITE, COLORS.LINK_BLUE, "center");
+          ExcelFormatter.setCellStyle(
+            cellLink,
+            COLORS.WHITE,
+            COLORS.LINK_BLUE,
+            "center"
+          );
           cellLink.font.underline = true;
         } else {
           cellLink.value = "-";
-          ExcelFormatter.setCellStyle(cellLink, COLORS.WHITE, COLORS.BLACK, "center");
+          ExcelFormatter.setCellStyle(
+            cellLink,
+            COLORS.WHITE,
+            COLORS.BLACK,
+            "center"
+          );
         }
       }
 
@@ -549,12 +586,17 @@ router.get("/export/laporan", async (req, res) => {
     ExcelFormatter.adjustColumnWidth(ws);
     ExcelFormatter.fixRowHeights(ws);
 
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename=Arsip_Perizinan_${namaPT.replace(/\s+/g, '_')}.xlsx`);
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=Arsip_Perizinan_${namaPT.replace(/\s+/g, "_")}.xlsx`
+    );
 
     await workbook.xlsx.write(res);
     res.end();
-
   } catch (e) {
     console.error("Export Perizinan Error:", e);
     res.status(500).send(`Gagal download excel perizinan: ${e.message}`);
@@ -566,11 +608,13 @@ router.get("/export/laporan", async (req, res) => {
 router.get("/export/kehadiran", async (req, res) => {
   try {
     const { idperusahaan, tglstart, tglend } = req.query;
-    if (!idperusahaan || !tglstart || !tglend) return res.status(400).send("Parameter tidak lengkap");
+    if (!idperusahaan || !tglstart || !tglend)
+      return res.status(400).send("Parameter tidak lengkap");
 
     const companyDoc = await db.collection("companies").doc(idperusahaan).get();
-    if (!companyDoc.exists) return res.status(404).send("Perusahaan tidak ditemukan");
-    
+    if (!companyDoc.exists)
+      return res.status(404).send("Perusahaan tidak ditemukan");
+
     const cData = companyDoc.data();
     const namaPT = cData.namaPerusahaan || idperusahaan;
     const emailAdmin = cData.createdBy || cData.email || "hr@sms.id";
@@ -580,13 +624,20 @@ router.get("/export/kehadiran", async (req, res) => {
     if (tglend.length <= 10) endDate.setHours(23, 59, 59, 999);
 
     // 1. Ambil Data Absensi
-    const absensiSnapshot = await db.collection("companies").doc(idperusahaan).collection("absensi")
+    const absensiSnapshot = await db
+      .collection("companies")
+      .doc(idperusahaan)
+      .collection("absensi")
       .where("tanggal", ">=", startDate)
       .where("tanggal", "<=", endDate)
-      .orderBy("tanggal", "asc").get();
+      .orderBy("tanggal", "asc")
+      .get();
 
     // 2. Ambil Data Perizinan (Approved)
-    const leavesSnapshot = await db.collection("companies").doc(idperusahaan).collection("leaves")
+    const leavesSnapshot = await db
+      .collection("companies")
+      .doc(idperusahaan)
+      .collection("leaves")
       .where("status", "==", "approved")
       .where("startDate", "<=", endDate)
       .get();
@@ -595,10 +646,17 @@ router.get("/export/kehadiran", async (req, res) => {
     const ws = workbook.addWorksheet("Arsip Kehadiran");
 
     const now = new Date();
-    const exportDateStr = now.toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta" });
-    const exportTimeStr = now.toLocaleTimeString("id-ID", { 
-      timeZone: "Asia/Jakarta", hour: '2-digit', minute: '2-digit', hour12: false 
-    }).replace(/\./g, ":");
+    const exportDateStr = now.toLocaleDateString("id-ID", {
+      timeZone: "Asia/Jakarta",
+    });
+    const exportTimeStr = now
+      .toLocaleTimeString("id-ID", {
+        timeZone: "Asia/Jakarta",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      })
+      .replace(/\./g, ":");
 
     ExcelTemplate.buildHeaderInfo(ws, [
       `Arsip hadir PT. ${namaPT}`,
@@ -610,7 +668,15 @@ router.get("/export/kehadiran", async (req, res) => {
       exportTimeStr,
     ]);
 
-    const RINCIAN_LABELS = ["Shift", "Masuk", "Pulang", "Durasi", "Cekin", "Cekout", "Lokasi"];
+    const RINCIAN_LABELS = [
+      "Shift",
+      "Masuk",
+      "Pulang",
+      "Durasi",
+      "Cekin",
+      "Cekout",
+      "Lokasi",
+    ];
 
     // 3. Gabungkan Data per Karyawan
     const employeeData = new Map(); // Map<Nama, { absensi: Map<day, data>, leaves: Map<day, data> }>
@@ -618,24 +684,34 @@ router.get("/export/kehadiran", async (req, res) => {
     absensiSnapshot.forEach((doc) => {
       const d = doc.data();
       const nama = d.namaKaryawan || "Tanpa Nama";
-      if (!employeeData.has(nama)) employeeData.set(nama, { absensi: new Map(), leaves: new Map() });
-      
-      const dateObj = d.tanggal.toDate ? d.tanggal.toDate() : new Date(d.tanggal);
+      if (!employeeData.has(nama))
+        employeeData.set(nama, { absensi: new Map(), leaves: new Map() });
+
+      const dateObj = d.tanggal.toDate
+        ? d.tanggal.toDate()
+        : new Date(d.tanggal);
       employeeData.get(nama).absensi.set(dateObj.getDate(), d);
     });
 
     leavesSnapshot.forEach((doc) => {
       const d = doc.data();
       const nama = d.userName || d.userId || "Tanpa Nama";
-      if (!employeeData.has(nama)) employeeData.set(nama, { absensi: new Map(), leaves: new Map() });
+      if (!employeeData.has(nama))
+        employeeData.set(nama, { absensi: new Map(), leaves: new Map() });
 
-      const startIzin = d.startDate?.toDate ? d.startDate.toDate() : new Date(d.startDate);
-      const endIzin = d.endDate?.toDate ? d.endDate.toDate() : new Date(d.endDate);
+      const startIzin = d.startDate?.toDate
+        ? d.startDate.toDate()
+        : new Date(d.startDate);
+      const endIzin = d.endDate?.toDate
+        ? d.endDate.toDate()
+        : new Date(d.endDate);
 
       let current = new Date(startIzin);
       while (current <= endIzin) {
         if (current >= startDate && current <= endDate) {
-          employeeData.get(nama).leaves.set(current.getDate(), d.tipeIzin || "Izin");
+          employeeData
+            .get(nama)
+            .leaves.set(current.getDate(), d.tipeIzin || "Izin");
         }
         current.setDate(current.getDate() + 1);
       }
@@ -654,13 +730,23 @@ router.get("/export/kehadiran", async (req, res) => {
       ws.mergeCells(`A${dataStartRow}:A${lastRowOfEmp}`);
       const nameCell = ws.getCell(`A${dataStartRow}`);
       nameCell.value = namaKaryawan;
-      ExcelFormatter.setCellStyle(nameCell, COLORS.PURPLE, COLORS.WHITE, "center");
+      ExcelFormatter.setCellStyle(
+        nameCell,
+        COLORS.PURPLE,
+        COLORS.WHITE,
+        "center"
+      );
 
       // Label Rincian (B)
       RINCIAN_LABELS.forEach((label, idx) => {
         const rincianCell = ws.getCell(dataStartRow + idx, 2);
         rincianCell.value = label;
-        ExcelFormatter.setCellStyle(rincianCell, COLORS.PURPLE, COLORS.WHITE, "left");
+        ExcelFormatter.setCellStyle(
+          rincianCell,
+          COLORS.PURPLE,
+          COLORS.WHITE,
+          "left"
+        );
       });
 
       // Data Per Tanggal
@@ -674,11 +760,18 @@ router.get("/export/kehadiran", async (req, res) => {
           for (let idx = 0; idx < 7; idx++) {
             const cell = ws.getCell(dataStartRow + idx, col);
             cell.value = leaveType;
-            ExcelFormatter.setCellStyle(cell, COLORS.ORANGE, COLORS.BLACK, "center");
+            ExcelFormatter.setCellStyle(
+              cell,
+              COLORS.ORANGE,
+              COLORS.BLACK,
+              "center"
+            );
           }
         } else if (absensi) {
           // JIKA ADA ABSENSI: Isi data normal
-          const durasiFormatted = absensi.durasi ? ExcelFormatter.formatDuration(absensi.durasi) : "-";
+          const durasiFormatted = absensi.durasi
+            ? ExcelFormatter.formatDuration(absensi.durasi)
+            : "-";
           const rowValues = [
             absensi.shift,
             ExcelFormatter.formatToAMPM(absensi.waktuCheckIn),
@@ -686,17 +779,28 @@ router.get("/export/kehadiran", async (req, res) => {
             durasiFormatted,
             absensi.fotoCheckIn ? "Buka" : "-",
             absensi.fotoCheckOut ? "Buka" : "-",
-            (absensi.alamatLatitude || absensi.alamatLoc) ? "Buka" : "-"
+            absensi.alamatLatitude || absensi.alamatLoc ? "Buka" : "-",
           ];
           const links = [
-            null, null, null, null,
-            absensi.fotoCheckIn, absensi.fotoCheckOut,
-            (absensi.alamatLatitude && absensi.alamatLongtitude) ? `https://www.google.com/maps?q=${absensi.alamatLatitude},${absensi.alamatLongtitude}` : null
+            null,
+            null,
+            null,
+            null,
+            absensi.fotoCheckIn,
+            absensi.fotoCheckOut,
+            absensi.alamatLatitude && absensi.alamatLongtitude
+              ? `https://www.google.com/maps?q=${absensi.alamatLatitude},${absensi.alamatLongtitude}`
+              : null,
           ];
 
           rowValues.forEach((val, idx) => {
             const cell = ws.getCell(dataStartRow + idx, col);
-            ExcelFormatter.applyDataCellStyle(cell, val, !!links[idx], links[idx]);
+            ExcelFormatter.applyDataCellStyle(
+              cell,
+              val,
+              !!links[idx],
+              links[idx]
+            );
           });
         } else {
           // KOSONG: Isi "-" background MERAH (default applyDataCellStyle untuk "-")
@@ -713,12 +817,17 @@ router.get("/export/kehadiran", async (req, res) => {
     ExcelFormatter.adjustColumnWidth(ws);
     ExcelFormatter.fixRowHeights(ws);
 
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename=Arsip_Kehadiran_${namaPT.replace(/\s+/g, '_')}.xlsx`);
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=Arsip_Kehadiran_${namaPT.replace(/\s+/g, "_")}.xlsx`
+    );
 
     await workbook.xlsx.write(res);
     res.end();
-
   } catch (e) {
     console.error("Export Error:", e);
     res.status(500).send(`Gagal download excel: ${e.message}`);
@@ -908,97 +1017,176 @@ router.get("/statreimburse", async (req, res) => {
 router.get("/export/reimburse", async (req, res) => {
   try {
     const { idperusahaan, tglstart, tglend } = req.query;
-
     if (!idperusahaan || !tglstart || !tglend) {
       return res.status(400).send("Parameter tidak lengkap");
     }
 
+    // 1. Ambil Data Perusahaan
+    const companyDoc = await db.collection("companies").doc(idperusahaan).get();
+    if (!companyDoc.exists)
+      return res.status(404).send("Perusahaan tidak ditemukan");
+
+    const cData = companyDoc.data();
+    const namaPT = cData.namaPerusahaan || idperusahaan;
+    const emailAdmin = cData.createdBy || cData.email || "hr@sms.id";
+
+    // 2. Filter Tanggal
     const startDate = new Date(tglstart);
     const endDate = new Date(tglend);
     endDate.setHours(23, 59, 59, 999);
 
+    // 3. Query Reimbursements - Filter hanya yang statusnya "Lunas"
     const snapshot = await db
       .collection("companies")
       .doc(idperusahaan)
       .collection("reimbursements")
+      .where("status", "==", "Lunas") // Request: Hanya yang sudah lunas
       .where("date", ">=", startDate)
       .where("date", "<=", endDate)
-      .orderBy("date", "desc")
       .get();
 
-    const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet("Laporan Reimburse");
+    // 4. Grouping & Sum Data per Karyawan: Map<Nama, Map<Day, TotalAmount>>
+    const reimburseMap = new Map();
 
-    // Setup Kolom
-    // UPDATED: Menambahkan Kategori dan Alamat
-    worksheet.columns = [
-      { header: "No", key: "no", width: 5 },
-      { header: "Tanggal", key: "date", width: 15 },
-      { header: "Nama Karyawan", key: "nama", width: 25 },
-      { header: "Kategori", key: "category", width: 20 }, // NEW: Kolom Kategori
-      { header: "Judul Pengajuan", key: "title", width: 30 },
-      { header: "Alamat", key: "address", width: 30 }, // NEW: Kolom Alamat
-      { header: "Deskripsi", key: "desc", width: 35 },
-      { header: "Jumlah (Rp)", key: "amount", width: 20 },
-      { header: "Status", key: "status", width: 15 },
-      { header: "Link Bukti", key: "evidence", width: 25 },
-      { header: "Diproses Oleh", key: "processedBy", width: 25 },
-      { header: "Tanggal Proses", key: "processedAt", width: 15 },
-    ];
-    worksheet.getRow(1).font = { bold: true };
-
-    let index = 1;
     snapshot.forEach((doc) => {
       const data = doc.data();
-      const row = worksheet.addRow({
-        no: index++,
-        date: formatDateIndo(data.date),
-        nama: data.requestByName || data.requestByEmail || "-",
-        category: data.category || "Umum", // NEW
-        title: data.title || "-",
-        address: data.address || "-", // NEW
-        desc: data.description || "-",
-        amount: data.amount || 0,
-        status: data.status || "Tunggakan",
-        evidence: data.evidence ? "Klik Disini" : "-",
-        processedBy: data.processedBy || "-",
-        processedAt: formatDateIndo(data.processedAt),
-      });
+      const nama = data.requestByName || data.requestByEmail || "Tanpa Nama";
+      const dateObj = data.date?.toDate
+        ? data.date.toDate()
+        : new Date(data.date);
+      const day = dateObj.getDate();
+      const amount = Number(data.amount) || 0;
 
-      // Format Currency Excel
-      row.getCell("amount").numFmt = '"Rp"#,##0';
+      if (!reimburseMap.has(nama)) reimburseMap.set(nama, new Map());
 
-      // Hyperlink Bukti
-      if (data.evidence && data.evidence.fileUrl) {
-        row.getCell("evidence").value = {
-          text: "Buka Bukti",
-          hyperlink: data.evidence.fileUrl,
-        };
-        row.getCell("evidence").font = {
-          color: { argb: "FF0000FF" },
-          underline: true,
-        };
-      }
+      const currentDaySum = reimburseMap.get(nama).get(day) || 0;
+      reimburseMap.get(nama).set(day, currentDaySum + amount);
     });
 
-    // STREAM DOWNLOAD LANGSUNG
+    const workbook = new ExcelJS.Workbook();
+    const ws = workbook.addWorksheet("Arsip Reimburse");
+
+    const now = new Date();
+    const exportDateStr = now.toLocaleDateString("id-ID", {
+      timeZone: "Asia/Jakarta",
+    });
+    const exportTimeStr = now
+      .toLocaleTimeString("id-ID", {
+        timeZone: "Asia/Jakarta",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      })
+      .replace(/\./g, ":");
+
+    // 5. Build Header Informasi (A1-C7)
+    ExcelTemplate.buildHeaderInfo(ws, [
+      `Arsip Reimburse (Lunas) PT. ${namaPT}`,
+      startDate.toLocaleDateString("id-ID"),
+      endDate.toLocaleDateString("id-ID"),
+      "VORCE",
+      emailAdmin,
+      exportDateStr,
+      exportTimeStr,
+    ]);
+
+    const RINCIAN_LABELS = ["Total Lunas (Rp)"];
+    let currentRow = 9;
+
+    // Helper format currency Rp18,350.00
+    const formatRp = (val) => {
+      if (val === undefined || val === null || val === 0) return "Rp0.00";
+      return (
+        "Rp" +
+        Number(val).toLocaleString("en-US", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })
+      );
+    };
+
+    // 6. Loop Setiap Karyawan
+    reimburseMap.forEach((daysSumMap, namaKaryawan) => {
+      if (currentRow > 9) currentRow += 1;
+
+      ExcelTemplate.buildTableGridHeader(ws, currentRow);
+      const dataStartRow = currentRow + 2;
+
+      // Nama (A)
+      const nameCell = ws.getCell(`A${dataStartRow}`);
+      nameCell.value = namaKaryawan;
+      ExcelFormatter.setCellStyle(
+        nameCell,
+        COLORS.PURPLE,
+        COLORS.WHITE,
+        "center"
+      );
+
+      // Label Rincian (B)
+      const rincianCell = ws.getCell(dataStartRow, 2);
+      rincianCell.value = RINCIAN_LABELS[0];
+      ExcelFormatter.setCellStyle(
+        rincianCell,
+        COLORS.PURPLE,
+        COLORS.WHITE,
+        "left"
+      );
+
+      // Data 1 - 31
+      for (let d = 1; d <= 31; d++) {
+        const col = 2 + d;
+        const totalAmount = daysSumMap.get(d) || 0;
+
+        const cell = ws.getCell(dataStartRow, col);
+        if (totalAmount > 0) {
+          cell.value = formatRp(totalAmount);
+          // Data ada: BG Putih, Font Hitam Bold
+          ExcelFormatter.setCellStyle(
+            cell,
+            COLORS.WHITE,
+            COLORS.BLACK,
+            "center"
+          );
+          cell.font.bold = true;
+        } else {
+          cell.value = "-";
+          // Kosong: BG Putih, Font Hitam Biasa
+          ExcelFormatter.setCellStyle(
+            cell,
+            COLORS.WHITE,
+            COLORS.BLACK,
+            "center"
+          );
+          cell.font.bold = false;
+        }
+      }
+
+      currentRow = dataStartRow + 1;
+    });
+
+    // 7. Sentuhan Akhir
+    ExcelFormatter.adjustColumnWidth(ws);
+    ExcelFormatter.fixRowHeights(ws);
+
     res.setHeader(
       "Content-Type",
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     );
     res.setHeader(
       "Content-Disposition",
-      "attachment; filename=Laporan_Reimburse_" + idperusahaan + ".xlsx"
+      `attachment; filename=Arsip_Reimburse_Lunas_${namaPT.replace(
+        /\s+/g,
+        "_"
+      )}.xlsx`
     );
 
     await workbook.xlsx.write(res);
     res.end();
   } catch (e) {
-    console.error("Export Reimburse error:", e);
-    res.status(500).send("Gagal download excel");
+    console.error("Export Reimburse Error:", e);
+    res.status(500).send(`Gagal download excel reimburse: ${e.message}`);
   }
 });
-
 // ---------------------------------------------------------
 // 8. GET /stattugas -> Kirim Email Laporan Tugas (+ Tombol Download)
 // ---------------------------------------------------------
