@@ -260,18 +260,38 @@ router.post("/company-logo", verifyToken, async (req, res) => {
 // 1. GET MY PROFILE (Format Sesuai Request Legacy)
 // ---------------------------------------------------------
 // Endpoint: GET /api/user-profile
-router.get("/user-profile", verifyToken, async (req, res) => {
+// Endpoint: GET /api/user-profile/:email
+// Contoh akses: /api/user-profile/doni.smpn1@gmail.com
+router.get("/user-profile/:email", verifyToken, async (req, res) => {
   try {
-    const email = req.user.email; // Ambil dari Token Middleware
+    // 1. Ambil email dari Parameter URL
+    const targetEmail = req.params.email;
+    
+    // 2. Ambil idCompany pengakses dari middleware verifyToken (req.user)
+    const requesterIdCompany = req.user.idCompany;
 
-    // 1. Ambil Data User
-    const userDoc = await db.collection("users").doc(email).get();
-    if (!userDoc.exists) {
-      return res.status(404).json({ message: "Data user tidak ditemukan." });
+    if (!targetEmail) {
+      return res.status(400).json({ message: "Parameter email tidak valid." });
     }
+
+    // 3. Ambil Data User Target dari Firestore
+    const userDoc = await db.collection("users").doc(targetEmail).get();
+    
+    if (!userDoc.exists) {
+      return res.status(404).json({ message: "Data user tidak ditemukan di database." });
+    }
+
     const userData = userDoc.data();
 
-    // 2. Ambil Data Company (Karena butuh Longitude/Latitude/Alamat Kantor)
+    // 4. KONDISI: Cek idCompany pengakses vs idCompany target
+    // User hanya boleh lihat profile jika berada di perusahaan yang sama
+    if (userData.idCompany !== requesterIdCompany) {
+      return res.status(403).json({ 
+        message: "Akses dilarang. Anda tidak memiliki izin untuk melihat profil di luar perusahaan Anda." 
+      });
+    }
+
+    // 5. Ambil Data Company (untuk Longitude/Latitude kantor)
     let companyData = {};
     if (userData.idCompany) {
         const compDoc = await db.collection("companies").doc(userData.idCompany).get();
@@ -280,27 +300,28 @@ router.get("/user-profile", verifyToken, async (req, res) => {
         }
     }
 
-    // 3. Logic Formatting Status
+    // 6. Logic Formatting Status
     const statusString = `${userData.status ? userData.status.charAt(0).toUpperCase() + userData.status.slice(1) : "Inactive"} & ${userData.verified ? "Verified" : "Unverified"}`;
 
-    // 4. MAPPING DATA (Custom Format sesuai Request)
+    // 7. MAPPING DATA (Custom Format sesuai Request)
     const formattedProfile = {
       namaKaryawan: userData.username || "",
       liked: "yes", 
-      alamatEmail: userData.alamatEmail || email,
+      alamatEmail: userData.alamatEmail || targetEmail,
       noHP: userData.noTelp || null,
       noWA: userData.noWA || null,
       
-      // Data dari Collection Company
       namaPerusahaan: userData.companyName || companyData.namaPerusahaan || "",
       idPerusahaan: userData.idCompany || "",
       alamatLongtitude: companyData.longitude ? companyData.longitude.toString() : "0.0",
       alamatLatitude: companyData.latitude ? companyData.latitude.toString() : "0.0",
-      alamatLoc: userData.alamatLoc || companyData.alamatLoc || "", // Prioritas alamat user, fallback ke kantor
+      alamatLoc: userData.alamatLoc || companyData.alamatLoc || "", 
       
       foto: userData.photoURL || null,
       
-      joinDate: userData.createdAt ? userData.createdAt.toDate().toISOString().split('.')[0] : new Date().toISOString().split('.')[0],
+      joinDate: userData.createdAt 
+        ? (userData.createdAt.toDate ? userData.createdAt.toDate().toISOString().split('.')[0] : userData.createdAt)
+        : new Date().toISOString().split('.')[0],
       
       status: statusString,
       
@@ -312,11 +333,12 @@ router.get("/user-profile", verifyToken, async (req, res) => {
       statusAds: "Free"
     };
 
+    // Return array sesuai format awal kamu
     return res.status(200).json([formattedProfile]);
 
   } catch (e) {
     console.error("Get User Profile Error:", e);
-    return res.status(500).json({ message: "Server Error" });
+    return res.status(500).json({ message: "Server Error", error: e.message });
   }
 });
 
