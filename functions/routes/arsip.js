@@ -1075,120 +1075,150 @@ router.get("/stattugas", async (req, res) => {
 router.get("/export/tugas", async (req, res) => {
   try {
     const { idperusahaan, tglstart, tglend } = req.query;
-
     if (!idperusahaan || !tglstart || !tglend) {
       return res.status(400).send("Parameter tidak lengkap");
     }
 
+    // 1. Ambil Data Perusahaan
+    const companyDoc = await db.collection("companies").doc(idperusahaan).get();
+    if (!companyDoc.exists) return res.status(404).send("Perusahaan tidak ditemukan");
+    
+    const cData = companyDoc.data();
+    const namaPT = cData.namaPerusahaan || idperusahaan;
+    const emailAdmin = cData.createdBy || cData.email || "hr@sms.id";
+
+    // 2. Filter Tanggal
     const startDate = new Date(tglstart);
     const endDate = new Date(tglend);
     endDate.setHours(23, 59, 59, 999);
 
+    // 3. Query Tasks
     const snapshot = await db
       .collection("companies")
       .doc(idperusahaan)
       .collection("tasks")
       .where("createdAt", ">=", startDate)
       .where("createdAt", "<=", endDate)
-      .orderBy("createdAt", "desc")
       .get();
 
-    const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet("Laporan Tugas");
+    // 4. Grouping Data: Map<Nama, Map<Tanggal, {Proses, Tunda, Selesai}>>
+    const statsMap = new Map();
 
-    // Setup Kolom
-    worksheet.columns = [
-      { header: "No", key: "no", width: 5 },
-      { header: "Tanggal Dibuat", key: "createdAt", width: 15 },
-      { header: "Ditugaskan Ke", key: "assignedTo", width: 30 },
-      { header: "Deskripsi", key: "desc", width: 40 },
-      { header: "Deadline", key: "deadline", width: 15 },
-      { header: "Status", key: "status", width: 15 },
-      { header: "Selesai Pada", key: "finishedAt", width: 15 },
-      { header: "Keterangan", key: "note", width: 20 }, // Untuk info telat
-    ];
-
-    // Header Style
-    worksheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
-    worksheet.getRow(1).fill = {
-      type: "pattern",
-      pattern: "solid",
-      fgColor: { argb: "FF34495E" }, // Dark Blue Grey
-    };
-
-    let index = 1;
     snapshot.forEach((doc) => {
       const data = doc.data();
+      const createdAt = data.createdAt?.toDate ? data.createdAt.toDate() : new Date(data.createdAt);
+      const day = createdAt.getDate();
+      const status = data.status || "Proses";
 
-      // Handle Array Names
-      let assignedNames = "-";
+      // Handle assignedToName (Bisa String atau Array)
+      let names = [];
       if (Array.isArray(data.assignedToName)) {
-        assignedNames = data.assignedToName.join(", ");
+        names = data.assignedToName;
       } else if (data.assignedToName) {
-        assignedNames = data.assignedToName;
+        names = [data.assignedToName];
+      } else {
+        names = ["Tanpa Nama"];
       }
 
-      // Logic Overdue
-      let note = "-";
-      const deadlineDate = data.deadline
-        ? data.deadline.toDate
-          ? data.deadline.toDate()
-          : new Date(data.deadline)
-        : null;
-      const finishedDate = data.finishedAt
-        ? data.finishedAt.toDate
-          ? data.finishedAt.toDate()
-          : new Date(data.finishedAt)
-        : null;
-
-      // Jika sudah selesai, cek apakah telat selesainya
-      if (data.status === "Selesai" && deadlineDate && finishedDate) {
-        if (finishedDate > deadlineDate) {
-          note = "Terlambat Selesai";
+      names.forEach((nama) => {
+        if (!statsMap.has(nama)) statsMap.set(nama, {});
+        if (!statsMap.get(nama)[day]) {
+          statsMap.get(nama)[day] = { "Proses": 0, "Tunda": 0, "Selesai": 0 };
+        }
+        
+        // Tambahkan hitungan jika status cocok
+        if (statsMap.get(nama)[day].hasOwnProperty(status)) {
+          statsMap.get(nama)[day][status]++;
         } else {
-          note = "Tepat Waktu";
+          // Fallback jika ada status aneh di luar 3 itu, masukkan ke Proses atau abaikan
+          statsMap.get(nama)[day]["Proses"]++;
         }
-      }
-      // Jika belum selesai dan deadline sudah lewat
-      else if (data.status !== "Selesai" && deadlineDate) {
-        if (new Date() > deadlineDate) {
-          note = "OVERDUE (Terlambat)";
-        }
-      }
-
-      const row = worksheet.addRow({
-        no: index++,
-        createdAt: formatDateIndo(data.createdAt),
-        assignedTo: assignedNames,
-        desc: data.description || "-",
-        deadline: formatDateIndo(data.deadline),
-        status: data.status || "Proses",
-        finishedAt: formatDateIndo(data.finishedAt),
-        note: note,
       });
-
-      // Highlight warna merah jika Overdue
-      if (note.includes("Terlambat") || note.includes("OVERDUE")) {
-        row.getCell("note").font = { color: { argb: "FFFF0000" }, bold: true }; // Merah
-        row.getCell("deadline").font = { color: { argb: "FFFF0000" } };
-      }
     });
 
-    // STREAM DOWNLOAD
-    res.setHeader(
-      "Content-Type",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    );
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename=Laporan_Tugas_${idperusahaan}.xlsx`
-    );
+    const workbook = new ExcelJS.Workbook();
+    const ws = workbook.addWorksheet("Arsip Tugas");
+
+    const now = new Date();
+    const exportDateStr = now.toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta" });
+    const exportTimeStr = now.toLocaleTimeString("id-ID", { 
+      timeZone: "Asia/Jakarta", hour: '2-digit', minute: '2-digit', hour12: false 
+    }).replace(/\./g, ":");
+
+    // 5. Build Header Informasi (A1-C7)
+    ExcelTemplate.buildHeaderInfo(ws, [
+      `Arsip Tugas PT. ${namaPT}`,
+      startDate.toLocaleDateString("id-ID"),
+      endDate.toLocaleDateString("id-ID"),
+      "VORCE",
+      emailAdmin,
+      exportDateStr,
+      exportTimeStr,
+    ]);
+
+    const TASK_STATUS_LABELS = ["Proses", "Tunda", "Selesai"];
+    let currentRow = 9;
+
+    // 6. Loop Setiap Karyawan
+    statsMap.forEach((daysData, namaKaryawan) => {
+      if (currentRow > 9) currentRow += 1; // Gap antar karyawan
+
+      ExcelTemplate.buildTableGridHeader(ws, currentRow);
+      const dataStartRow = currentRow + 2;
+
+      // Merge Nama (Kolom A) untuk 3 baris status
+      const lastRowOfEmp = dataStartRow + 2;
+      ws.mergeCells(`A${dataStartRow}:A${lastRowOfEmp}`);
+      const nameCell = ws.getCell(`A${dataStartRow}`);
+      nameCell.value = namaKaryawan;
+      ExcelFormatter.setCellStyle(nameCell, COLORS.PURPLE, COLORS.WHITE, "center");
+
+      // Label Status (Kolom B)
+      TASK_STATUS_LABELS.forEach((label, idx) => {
+        const statusLabelCell = ws.getCell(dataStartRow + idx, 2);
+        statusLabelCell.value = label;
+        ExcelFormatter.setCellStyle(statusLabelCell, COLORS.PURPLE, COLORS.WHITE, "left");
+      });
+
+      // Isi Data 1 - 31
+      for (let d = 1; d <= 31; d++) {
+        const col = 2 + d;
+        const dailyTask = daysData[d]; // {Proses, Tunda, Selesai} atau undefined
+
+        TASK_STATUS_LABELS.forEach((statusLabel, idx) => {
+          const cell = ws.getCell(dataStartRow + idx, col);
+          const count = dailyTask ? dailyTask[statusLabel] : 0;
+
+          if (count > 0) {
+            // Jika ada tugas: Tampilkan angka, bg Putih, text Hitam
+            cell.value = count;
+            ExcelFormatter.setCellStyle(cell, COLORS.WHITE, COLORS.BLACK, "center");
+            cell.font.bold = true;
+          } else {
+            // Sesuai Request: Jika tidak ada data, isi "-" bg putih
+            cell.value = "-";
+            ExcelFormatter.setCellStyle(cell, COLORS.WHITE, COLORS.BLACK, "center");
+            cell.font.bold = false;
+          }
+        });
+      }
+
+      currentRow = lastRowOfEmp + 1;
+    });
+
+    // 7. Finalisasi File
+    ExcelFormatter.adjustColumnWidth(ws);
+    ExcelFormatter.fixRowHeights(ws);
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename=Arsip_Tugas_${namaPT.replace(/\s+/g, '_')}.xlsx`);
 
     await workbook.xlsx.write(res);
     res.end();
+
   } catch (e) {
-    console.error("Export Tugas error:", e);
-    res.status(500).send("Gagal download excel");
+    console.error("Export Tugas Error:", e);
+    res.status(500).send(`Gagal download excel tugas: ${e.message}`);
   }
 });
 
