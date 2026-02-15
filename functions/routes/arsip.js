@@ -428,80 +428,138 @@ router.get("/statkehadiran", async (req, res) => {
 router.get("/export/laporan", async (req, res) => {
   try {
     const { idperusahaan, tglstart, tglend } = req.query;
-
     if (!idperusahaan || !tglstart || !tglend) {
       return res.status(400).send("Parameter tidak lengkap");
     }
 
-    const startDate = new Date(tglstart);
-    const endDate = new Date(tglend);
+    // 1. Ambil Data Perusahaan
+    const companyDoc = await db.collection("companies").doc(idperusahaan).get();
+    if (!companyDoc.exists) return res.status(404).send("Perusahaan tidak ditemukan");
+    
+    const cData = companyDoc.data();
+    const namaPT = cData.namaPerusahaan || idperusahaan;
+    const emailAdmin = cData.createdBy || cData.email || "hr@sms.id";
+
+    // 2. Filter Tanggal & Query (Hanya yang Approved)
+    const startDateFilter = new Date(tglstart);
+    const endDateFilter = new Date(tglend);
+    endDateFilter.setHours(23, 59, 59, 999);
 
     const snapshot = await db
       .collection("companies")
       .doc(idperusahaan)
       .collection("leaves")
-      .where("startDate", ">=", startDate)
-      .where("startDate", "<=", endDate)
+      .where("status", "==", "approved") 
+      .where("startDate", "<=", endDateFilter) 
       .get();
 
-    const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet("Laporan Perizinan");
+    // 3. Grouping Data: Map<Nama, Map<Tanggal, { tipe, link }>>
+    const leavesMap = new Map();
 
-    worksheet.columns = [
-      { header: "No", key: "no", width: 5 },
-      { header: "Nama Karyawan", key: "userName", width: 25 },
-      { header: "Tipe Izin", key: "tipe", width: 15 },
-      { header: "Tanggal Mulai", key: "start", width: 20 },
-      { header: "Tanggal Selesai", key: "end", width: 20 },
-      { header: "Keterangan", key: "keterangan", width: 30 },
-      { header: "Status", key: "status", width: 15 },
-      { header: "Link Lampiran", key: "link", width: 40 },
-    ];
-    worksheet.getRow(1).font = { bold: true };
-
-    let index = 1;
     snapshot.forEach((doc) => {
       const data = doc.data();
-      const row = worksheet.addRow({
-        no: index++,
-        userName: data.userName || data.userId || "-",
-        tipe: data.tipeIzin || "-",
-        start: formatDateIndo(data.startDate),
-        end: formatDateIndo(data.endDate),
-        keterangan: data.keterangan || "-",
-        status: data.status || "Pending",
-        link: data.attachmentUrl ? "Klik Disini" : "-",
-      });
-      if (data.attachmentUrl) {
-        row.getCell("link").value = {
-          text: "Buka Lampiran",
-          hyperlink: data.attachmentUrl,
-        };
-        row.getCell("link").font = {
-          color: { argb: "FF0000FF" },
-          underline: true,
-        };
+      const nama = data.userName || data.userId || "Tanpa Nama";
+      
+      const startIzin = data.startDate?.toDate ? data.startDate.toDate() : new Date(data.startDate);
+      const endIzin = data.endDate?.toDate ? data.endDate.toDate() : new Date(data.endDate);
+
+      if (!leavesMap.has(nama)) leavesMap.set(nama, {});
+
+      let current = new Date(startIzin);
+      while (current <= endIzin) {
+        if (current >= startDateFilter && current <= endDateFilter) {
+          const day = current.getDate();
+          leavesMap.get(nama)[day] = {
+            tipe: data.tipeIzin || "Izin",
+            link: data.attachmentUrl || null
+          };
+        }
+        current.setDate(current.getDate() + 1);
       }
     });
 
-    // STREAM DOWNLOAD LANGSUNG
-    res.setHeader(
-      "Content-Type",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    );
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename=Laporan_Perizinan_${idperusahaan}.xlsx`
-    );
+    const workbook = new ExcelJS.Workbook();
+    const ws = workbook.addWorksheet("Arsip Perizinan");
+
+    const now = new Date();
+    const exportDateStr = now.toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta" });
+    const exportTimeStr = now.toLocaleTimeString("id-ID", { 
+      timeZone: "Asia/Jakarta", hour: '2-digit', minute: '2-digit', hour12: false 
+    }).replace(/\./g, ":");
+
+    // 4. Build Header Informasi (A1-C7)
+    ExcelTemplate.buildHeaderInfo(ws, [
+      `Arsip Perizinan PT. ${namaPT}`,
+      startDateFilter.toLocaleDateString("id-ID"),
+      endDateFilter.toLocaleDateString("id-ID"),
+      "VORCE",
+      emailAdmin,
+      exportDateStr,
+      exportTimeStr,
+    ]);
+
+    const RINCIAN_LABELS = ["Tipe", "Lampiran"];
+    let currentRow = 9;
+
+    // 5. Loop Setiap Karyawan
+    leavesMap.forEach((daysData, namaKaryawan) => {
+      if (currentRow > 9) currentRow += 1; 
+
+      ExcelTemplate.buildTableGridHeader(ws, currentRow);
+      const dataStartRow = currentRow + 2;
+
+      const lastRowOfEmp = dataStartRow + 1;
+      ws.mergeCells(`A${dataStartRow}:A${lastRowOfEmp}`);
+      const nameCell = ws.getCell(`A${dataStartRow}`);
+      nameCell.value = namaKaryawan;
+      ExcelFormatter.setCellStyle(nameCell, COLORS.PURPLE, COLORS.WHITE, "center");
+
+      RINCIAN_LABELS.forEach((label, idx) => {
+        const rincianCell = ws.getCell(dataStartRow + idx, 2);
+        rincianCell.value = label;
+        ExcelFormatter.setCellStyle(rincianCell, COLORS.PURPLE, COLORS.WHITE, "left");
+      });
+
+      // Isi Data 1 - 31
+      for (let d = 1; d <= 31; d++) {
+        const col = 2 + d;
+        const leaveData = daysData[d];
+
+        // Baris Tipe
+        const cellTipe = ws.getCell(dataStartRow, col);
+        cellTipe.value = leaveData ? leaveData.tipe : "-";
+        // Rule: Selalu Putih untuk Arsip Perizinan
+        ExcelFormatter.setCellStyle(cellTipe, COLORS.WHITE, COLORS.BLACK, "center");
+
+        // Baris Lampiran
+        const cellLink = ws.getCell(dataStartRow + 1, col);
+        if (leaveData && leaveData.link) {
+          cellLink.value = { text: "Buka", hyperlink: leaveData.link };
+          ExcelFormatter.setCellStyle(cellLink, COLORS.WHITE, COLORS.LINK_BLUE, "center");
+          cellLink.font.underline = true;
+        } else {
+          cellLink.value = "-";
+          ExcelFormatter.setCellStyle(cellLink, COLORS.WHITE, COLORS.BLACK, "center");
+        }
+      }
+
+      currentRow = lastRowOfEmp + 1;
+    });
+
+    ExcelFormatter.adjustColumnWidth(ws);
+    ExcelFormatter.fixRowHeights(ws);
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename=Arsip_Perizinan_${namaPT.replace(/\s+/g, '_')}.xlsx`);
 
     await workbook.xlsx.write(res);
     res.end();
+
   } catch (e) {
-    console.error("Export Laporan error:", e);
-    res.status(500).send("Gagal download excel");
+    console.error("Export Perizinan Error:", e);
+    res.status(500).send(`Gagal download excel perizinan: ${e.message}`);
   }
 });
-
 // ---------------------------------------------------------
 // 5. GET /export/kehadiran - DOWNLOAD Excel Kehadiran (Stream)
 // ---------------------------------------------------------
@@ -521,22 +579,27 @@ router.get("/export/kehadiran", async (req, res) => {
     const endDate = new Date(tglend);
     if (tglend.length <= 10) endDate.setHours(23, 59, 59, 999);
 
-    const snapshot = await db.collection("companies").doc(idperusahaan).collection("absensi")
+    // 1. Ambil Data Absensi
+    const absensiSnapshot = await db.collection("companies").doc(idperusahaan).collection("absensi")
       .where("tanggal", ">=", startDate)
       .where("tanggal", "<=", endDate)
       .orderBy("tanggal", "asc").get();
 
+    // 2. Ambil Data Perizinan (Approved)
+    const leavesSnapshot = await db.collection("companies").doc(idperusahaan).collection("leaves")
+      .where("status", "==", "approved")
+      .where("startDate", "<=", endDate)
+      .get();
+
     const workbook = new ExcelJS.Workbook();
     const ws = workbook.addWorksheet("Arsip Kehadiran");
 
-    // Waktu Lokal User (Asia/Jakarta)
     const now = new Date();
     const exportDateStr = now.toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta" });
     const exportTimeStr = now.toLocaleTimeString("id-ID", { 
       timeZone: "Asia/Jakarta", hour: '2-digit', minute: '2-digit', hour12: false 
     }).replace(/\./g, ":");
 
-    // 1. Header Informasi (A1-C7)
     ExcelTemplate.buildHeaderInfo(ws, [
       `Arsip hadir PT. ${namaPT}`,
       startDate.toLocaleDateString("id-ID"),
@@ -549,20 +612,39 @@ router.get("/export/kehadiran", async (req, res) => {
 
     const RINCIAN_LABELS = ["Shift", "Masuk", "Pulang", "Durasi", "Cekin", "Cekout", "Lokasi"];
 
-    // 2. Grouping Data per Karyawan
-    const employeeMap = new Map();
-    snapshot.forEach((doc) => {
+    // 3. Gabungkan Data per Karyawan
+    const employeeData = new Map(); // Map<Nama, { absensi: Map<day, data>, leaves: Map<day, data> }>
+
+    absensiSnapshot.forEach((doc) => {
       const d = doc.data();
       const nama = d.namaKaryawan || "Tanpa Nama";
-      if (!employeeMap.has(nama)) employeeMap.set(nama, []);
-      employeeMap.get(nama).push(d);
+      if (!employeeData.has(nama)) employeeData.set(nama, { absensi: new Map(), leaves: new Map() });
+      
+      const dateObj = d.tanggal.toDate ? d.tanggal.toDate() : new Date(d.tanggal);
+      employeeData.get(nama).absensi.set(dateObj.getDate(), d);
+    });
+
+    leavesSnapshot.forEach((doc) => {
+      const d = doc.data();
+      const nama = d.userName || d.userId || "Tanpa Nama";
+      if (!employeeData.has(nama)) employeeData.set(nama, { absensi: new Map(), leaves: new Map() });
+
+      const startIzin = d.startDate?.toDate ? d.startDate.toDate() : new Date(d.startDate);
+      const endIzin = d.endDate?.toDate ? d.endDate.toDate() : new Date(d.endDate);
+
+      let current = new Date(startIzin);
+      while (current <= endIzin) {
+        if (current >= startDate && current <= endDate) {
+          employeeData.get(nama).leaves.set(current.getDate(), d.tipeIzin || "Izin");
+        }
+        current.setDate(current.getDate() + 1);
+      }
     });
 
     let currentRow = 9;
 
-    // 3. Konten Karyawan
-    employeeMap.forEach((absensiList, namaKaryawan) => {
-      if (currentRow > 9) currentRow += 1; // Gap baris kosong antar karyawan
+    employeeData.forEach((dataObj, namaKaryawan) => {
+      if (currentRow > 9) currentRow += 1;
 
       ExcelTemplate.buildTableGridHeader(ws, currentRow);
       const dataStartRow = currentRow + 2;
@@ -581,48 +663,53 @@ router.get("/export/kehadiran", async (req, res) => {
         ExcelFormatter.setCellStyle(rincianCell, COLORS.PURPLE, COLORS.WHITE, "left");
       });
 
-      // Data Absensi per Tanggal
-      absensiList.forEach((data) => {
-        const dateObj = data.tanggal.toDate ? data.tanggal.toDate() : new Date(data.tanggal);
-        const day = dateObj.getDate();
-        if (day < 1 || day > 31) return;
-        
-        const col = 2 + day;
-        const durasiFormatted = data.durasi ? ExcelFormatter.formatDuration(data.durasi) : "-";
-
-        const rowData = [
-          { val: data.shift },
-          { val: ExcelFormatter.formatToAMPM(data.waktuCheckIn) },
-          { val: ExcelFormatter.formatToAMPM(data.waktuCheckOut) },
-          { val: durasiFormatted },
-          { val: data.fotoCheckIn ? "Buka" : "-", isLink: !!data.fotoCheckIn, link: data.fotoCheckIn },
-          { val: data.fotoCheckOut ? "Buka" : "-", isLink: !!data.fotoCheckOut, link: data.fotoCheckOut },
-          { 
-            val: (data.alamatLatitude || data.alamatLoc) ? "Buka" : "-", 
-            isLink: !!(data.alamatLatitude && data.alamatLongtitude), 
-            link: `https://www.google.com/maps?q=${data.alamatLatitude},${data.alamatLongtitude}` 
-          },
-        ];
-
-        rowData.forEach((item, idx) => {
-          const cell = ws.getCell(dataStartRow + idx, col);
-          ExcelFormatter.applyDataCellStyle(cell, item.val, item.isLink, item.link);
-        });
-      });
-
-      // Isi cell kosong dengan "-"
+      // Data Per Tanggal
       for (let d = 1; d <= 31; d++) {
         const col = 2 + d;
-        for (let idx = 0; idx < 7; idx++) {
-          const cell = ws.getCell(dataStartRow + idx, col);
-          if (!cell.value) ExcelFormatter.applyDataCellStyle(cell, "-");
+        const leaveType = dataObj.leaves.get(d);
+        const absensi = dataObj.absensi.get(d);
+
+        if (leaveType) {
+          // JIKA ADA IZIN: Isi semua baris rincian dengan tipe izin, background ORANYE
+          for (let idx = 0; idx < 7; idx++) {
+            const cell = ws.getCell(dataStartRow + idx, col);
+            cell.value = leaveType;
+            ExcelFormatter.setCellStyle(cell, COLORS.ORANGE, COLORS.BLACK, "center");
+          }
+        } else if (absensi) {
+          // JIKA ADA ABSENSI: Isi data normal
+          const durasiFormatted = absensi.durasi ? ExcelFormatter.formatDuration(absensi.durasi) : "-";
+          const rowValues = [
+            absensi.shift,
+            ExcelFormatter.formatToAMPM(absensi.waktuCheckIn),
+            ExcelFormatter.formatToAMPM(absensi.waktuCheckOut),
+            durasiFormatted,
+            absensi.fotoCheckIn ? "Buka" : "-",
+            absensi.fotoCheckOut ? "Buka" : "-",
+            (absensi.alamatLatitude || absensi.alamatLoc) ? "Buka" : "-"
+          ];
+          const links = [
+            null, null, null, null,
+            absensi.fotoCheckIn, absensi.fotoCheckOut,
+            (absensi.alamatLatitude && absensi.alamatLongtitude) ? `https://www.google.com/maps?q=${absensi.alamatLatitude},${absensi.alamatLongtitude}` : null
+          ];
+
+          rowValues.forEach((val, idx) => {
+            const cell = ws.getCell(dataStartRow + idx, col);
+            ExcelFormatter.applyDataCellStyle(cell, val, !!links[idx], links[idx]);
+          });
+        } else {
+          // KOSONG: Isi "-" background MERAH (default applyDataCellStyle untuk "-")
+          for (let idx = 0; idx < 7; idx++) {
+            const cell = ws.getCell(dataStartRow + idx, col);
+            ExcelFormatter.applyDataCellStyle(cell, "-");
+          }
         }
       }
 
       currentRow = lastRowOfEmp + 1;
     });
 
-    // Sentuhan Akhir: Auto-lebar kolom & Ketinggian baris fixed (0.5cm)
     ExcelFormatter.adjustColumnWidth(ws);
     ExcelFormatter.fixRowHeights(ws);
 
@@ -633,11 +720,10 @@ router.get("/export/kehadiran", async (req, res) => {
     res.end();
 
   } catch (e) {
-    console.error("Export Error Detail:", e);
+    console.error("Export Error:", e);
     res.status(500).send(`Gagal download excel: ${e.message}`);
   }
 });
-
 
 // ---------------------------------------------------------
 // 6. GET /statreimburse -> Kirim Email Laporan Reimburse (+ Tombol Download)
@@ -1081,8 +1167,9 @@ router.get("/export/tugas", async (req, res) => {
 
     // 1. Ambil Data Perusahaan
     const companyDoc = await db.collection("companies").doc(idperusahaan).get();
-    if (!companyDoc.exists) return res.status(404).send("Perusahaan tidak ditemukan");
-    
+    if (!companyDoc.exists)
+      return res.status(404).send("Perusahaan tidak ditemukan");
+
     const cData = companyDoc.data();
     const namaPT = cData.namaPerusahaan || idperusahaan;
     const emailAdmin = cData.createdBy || cData.email || "hr@sms.id";
@@ -1106,7 +1193,9 @@ router.get("/export/tugas", async (req, res) => {
 
     snapshot.forEach((doc) => {
       const data = doc.data();
-      const createdAt = data.createdAt?.toDate ? data.createdAt.toDate() : new Date(data.createdAt);
+      const createdAt = data.createdAt?.toDate
+        ? data.createdAt.toDate()
+        : new Date(data.createdAt);
       const day = createdAt.getDate();
       const status = data.status || "Proses";
 
@@ -1123,9 +1212,9 @@ router.get("/export/tugas", async (req, res) => {
       names.forEach((nama) => {
         if (!statsMap.has(nama)) statsMap.set(nama, {});
         if (!statsMap.get(nama)[day]) {
-          statsMap.get(nama)[day] = { "Proses": 0, "Tunda": 0, "Selesai": 0 };
+          statsMap.get(nama)[day] = { Proses: 0, Tunda: 0, Selesai: 0 };
         }
-        
+
         // Tambahkan hitungan jika status cocok
         if (statsMap.get(nama)[day].hasOwnProperty(status)) {
           statsMap.get(nama)[day][status]++;
@@ -1140,10 +1229,17 @@ router.get("/export/tugas", async (req, res) => {
     const ws = workbook.addWorksheet("Arsip Tugas");
 
     const now = new Date();
-    const exportDateStr = now.toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta" });
-    const exportTimeStr = now.toLocaleTimeString("id-ID", { 
-      timeZone: "Asia/Jakarta", hour: '2-digit', minute: '2-digit', hour12: false 
-    }).replace(/\./g, ":");
+    const exportDateStr = now.toLocaleDateString("id-ID", {
+      timeZone: "Asia/Jakarta",
+    });
+    const exportTimeStr = now
+      .toLocaleTimeString("id-ID", {
+        timeZone: "Asia/Jakarta",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      })
+      .replace(/\./g, ":");
 
     // 5. Build Header Informasi (A1-C7)
     ExcelTemplate.buildHeaderInfo(ws, [
@@ -1171,13 +1267,23 @@ router.get("/export/tugas", async (req, res) => {
       ws.mergeCells(`A${dataStartRow}:A${lastRowOfEmp}`);
       const nameCell = ws.getCell(`A${dataStartRow}`);
       nameCell.value = namaKaryawan;
-      ExcelFormatter.setCellStyle(nameCell, COLORS.PURPLE, COLORS.WHITE, "center");
+      ExcelFormatter.setCellStyle(
+        nameCell,
+        COLORS.PURPLE,
+        COLORS.WHITE,
+        "center"
+      );
 
       // Label Status (Kolom B)
       TASK_STATUS_LABELS.forEach((label, idx) => {
         const statusLabelCell = ws.getCell(dataStartRow + idx, 2);
         statusLabelCell.value = label;
-        ExcelFormatter.setCellStyle(statusLabelCell, COLORS.PURPLE, COLORS.WHITE, "left");
+        ExcelFormatter.setCellStyle(
+          statusLabelCell,
+          COLORS.PURPLE,
+          COLORS.WHITE,
+          "left"
+        );
       });
 
       // Isi Data 1 - 31
@@ -1192,12 +1298,22 @@ router.get("/export/tugas", async (req, res) => {
           if (count > 0) {
             // Jika ada tugas: Tampilkan angka, bg Putih, text Hitam
             cell.value = count;
-            ExcelFormatter.setCellStyle(cell, COLORS.WHITE, COLORS.BLACK, "center");
+            ExcelFormatter.setCellStyle(
+              cell,
+              COLORS.WHITE,
+              COLORS.BLACK,
+              "center"
+            );
             cell.font.bold = true;
           } else {
             // Sesuai Request: Jika tidak ada data, isi "-" bg putih
             cell.value = "-";
-            ExcelFormatter.setCellStyle(cell, COLORS.WHITE, COLORS.BLACK, "center");
+            ExcelFormatter.setCellStyle(
+              cell,
+              COLORS.WHITE,
+              COLORS.BLACK,
+              "center"
+            );
             cell.font.bold = false;
           }
         });
@@ -1210,12 +1326,17 @@ router.get("/export/tugas", async (req, res) => {
     ExcelFormatter.adjustColumnWidth(ws);
     ExcelFormatter.fixRowHeights(ws);
 
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename=Arsip_Tugas_${namaPT.replace(/\s+/g, '_')}.xlsx`);
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=Arsip_Tugas_${namaPT.replace(/\s+/g, "_")}.xlsx`
+    );
 
     await workbook.xlsx.write(res);
     res.end();
-
   } catch (e) {
     console.error("Export Tugas Error:", e);
     res.status(500).send(`Gagal download excel tugas: ${e.message}`);
