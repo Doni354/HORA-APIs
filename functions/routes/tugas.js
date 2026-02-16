@@ -436,4 +436,65 @@ router.post("/update-status", verifyToken, async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------
+// DELETE /delete/:taskId - Delete Task (Admin Only)
+// ---------------------------------------------------------
+router.delete("/delete/:taskId", verifyToken, async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const { idCompany, role, email, nama } = req.user;
+
+    // 1. Validasi Role: Hanya Admin yang bisa menghapus
+    if (role !== "admin") {
+      return res.status(403).json({
+        message: "Akses ditolak. Hanya Admin yang dapat menghapus tugas.",
+      });
+    }
+
+    if (!taskId) {
+      return res.status(400).json({ message: "Task ID wajib disertakan." });
+    }
+
+    // 2. Referensi Dokumen di Subcollection 'tasks'
+    const taskRef = db
+      .collection("companies")
+      .doc(idCompany)
+      .collection("tasks")
+      .doc(taskId);
+
+    const taskDoc = await taskRef.get();
+
+    // 3. Cek Eksistensi
+    if (!taskDoc.exists) {
+      return res.status(404).json({ message: "Tugas tidak ditemukan." });
+    }
+
+    const taskData = taskDoc.data();
+
+    // 4. Eksekusi Hapus
+    await taskRef.delete();
+
+    // 5. Log Aktivitas Penghapusan
+    await logCompanyActivity(idCompany, {
+      actorEmail: email,
+      actorName: nama || "Admin",
+      target: taskId,
+      action: "DELETE_TASK",
+      description: `Menghapus tugas dengan deskripsi: "${
+        taskData.description || "Tanpa deskripsi"
+      }"`,
+    });
+
+    return res.status(200).json({
+      message: "Tugas berhasil dihapus secara permanen.",
+    });
+  } catch (error) {
+    console.error("Error Delete Task:", error);
+    return res.status(500).json({
+      message: "Terjadi kesalahan pada server saat menghapus tugas.",
+      error: error.message,
+    });
+  }
+});
+
 module.exports = router;
