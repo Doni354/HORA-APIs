@@ -545,7 +545,7 @@ router.post("/registrasi", async (req, res) => {
         totalLike: 0,
         // --- BATASAN SISTEM ---
         maxKaryawan: 10, // Default: 10 Orang
-        maxStorage: 0, // Default: 0 Bytes (Harus upgrade dulu baru bisa upload)
+        maxStorage: 1024, // Default: 0 Bytes (Harus upgrade dulu baru bisa upload)
         usedStorage: 0, // Terpakai: 0 Bytes
         createdAt: Timestamp.now(),
         createdBy: email,
