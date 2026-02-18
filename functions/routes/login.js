@@ -1030,4 +1030,87 @@ router.post("/login-google-admin", async (req, res) => {
     return res.status(500).json({ message: "Server Error" });
   }
 });
+
+/**
+ * ---------------------------------------------------------
+ * POST /register-faceid
+ * Deskripsi: Mendaftarkan data Face ID user ke sub-koleksi perusahaan
+ * ---------------------------------------------------------
+ */
+router.post("/register-faceid", verifyToken, async (req, res) => {
+  try {
+    const user = req.user;
+    const { userName, userEmail, faceImages } = req.body;
+
+    // 1. Validasi Akses & Input
+    if (!["admin", "staff"].includes(user.role)) {
+      return res.status(403).json({ message: "Hanya Admin & Staff yang boleh mendaftarkan Face ID." });
+    }
+
+    if (!user.idCompany) {
+      return res.status(400).json({ message: "ID Company tidak ditemukan pada profil Anda." });
+    }
+
+    if (!userName || !userEmail || !faceImages || !Array.isArray(faceImages)) {
+      return res.status(400).json({ 
+        message: "Data tidak lengkap. Pastikan nama, email, dan array gambar sudah benar." 
+      });
+    }
+
+    // Validasi isi array faceImages
+    // Ekspektasi faceImages: [{ fileId: "abc", fileUrl: "https://..." }, ...]
+    const isValidImages = faceImages.every(img => img.fileId && img.fileUrl);
+    if (!isValidImages) {
+      return res.status(400).json({ 
+        message: "Format faceImages tidak valid. Setiap item harus memiliki fileId dan fileUrl." 
+      });
+    }
+
+    // 2. Referensi Koleksi
+    // Path: companies/{idCompany}/faceid/{docId}
+    const companyRef = db.collection("companies").doc(user.idCompany);
+    const faceIdCollection = companyRef.collection("faceid");
+
+    // 3. Siapkan Data Document
+    const newFaceIdData = {
+      userName: userName,
+      userEmail: userEmail,
+      images: faceImages, // Menyimpan array [{fileId, fileUrl}, ...]
+      registeredBy: user.email,
+      status: "active",
+      createdAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
+    };
+
+    // 4. Simpan ke Firestore
+    const docRef = await faceIdCollection.add(newFaceIdData);
+
+    // 5. Log Aktivitas (Opsional, mengikuti pola upload Anda)
+    // Jika Anda memiliki fungsi logCompanyActivity
+    /*
+    await logCompanyActivity(user.idCompany, {
+      actorEmail: user.email,
+      actorName: user.nama || "User",
+      target: docRef.id,
+      action: "REGISTER_FACEID",
+      description: `Mendaftarkan Face ID untuk user: ${userName} (${userEmail})`,
+    });
+    */
+
+    return res.status(201).json({
+      message: "Registrasi Face ID berhasil disimpan.",
+      data: {
+        id: docRef.id,
+        ...newFaceIdData
+      }
+    });
+
+  } catch (error) {
+    console.error("Face ID Registration Error:", error);
+    return res.status(500).json({ 
+      message: "Terjadi kesalahan pada server.", 
+      error: error.message 
+    });
+  }
+});
 module.exports = router;
