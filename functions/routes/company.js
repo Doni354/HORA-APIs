@@ -667,7 +667,7 @@ router.post("/send-invite", verifyToken, async (req, res) => {
           subject: `Undangan Bergabung - ${companyName}`,
           html: `
             <h3>Halo!</h3>
-            <p>Anda diundang oleh <b>${adminData.nama || "Admin"}</b> untuk bergabung ke tim <b>${companyName}</b>.</p>
+            <p>Anda diundang oleh <b>${adminData.nama || "Admin"}</b> untuk bergabung ke <b>${companyName}</b>.</p>
             <p>Untuk menerima undangan ini, silakan klik link di bawah, lalu:</p>
             <ol>
               <li>Login menggunakan Akun Google (Email: ${targetEmail})</li>

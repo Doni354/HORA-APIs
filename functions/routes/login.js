@@ -10,6 +10,7 @@ const { db, bucket } = require("../config/firebase");
 const { verifyToken } = require("../middleware/token");
 const { logCompanyActivity } = require("../helper/logCompanyActivity");
 const router = express.Router();
+const EmailTemplates = require("../helper/emailHelper");
 
 // ---------------------------------------------------------
 // CONFIG FROM ENV
@@ -77,15 +78,8 @@ router.put("/sendlink", async (req, res) => {
     console.log(`OTP for ${email}: ${otp}`);
 
     // Kirim Email
-    await db.collection("mail").add({
-      to: email,
-      message: {
-        subject: "Kode Masuk Akun",
-        html: `
-            <h1>${otp}</h1>
-            <p>Berlaku ${Math.floor(OTP_DURATION / 60)} menit.</p>
-          `,
-      },
+    await EmailTemplates.send(email, "otp", {
+      code: otp,
     });
 
     return res.status(200).send("Kode OTP telah dikirim");
@@ -258,7 +252,7 @@ const handleEmailVerification = async (db, userRef, userData, email) => {
     ? userData.lastVerifyEmailSentAt.toMillis()
     : 0;
   const now = Date.now();
-  const cooldownMs = 5 * 60 * 1000; // 5 Menit
+  const cooldownMs = 1 * 60 * 1000; // 1 Menit
 
   if (now - lastSent < cooldownMs) {
     const remainingSeconds = Math.ceil((cooldownMs - (now - lastSent)) / 1000);
@@ -288,17 +282,9 @@ const handleEmailVerification = async (db, userRef, userData, email) => {
   // Kirim Email (Masuk collection 'mail')
   const linkVerifikasi = `https://api-y4ntpb3uvq-et.a.run.app/api/Login/confirm-email?email=${email}&token=${verifyToken}`;
 
-  await db.collection("mail").add({
-    to: email,
-    message: {
-      subject: "Verifikasi Akun Anda",
-      html: `
-              <h3>Halo, ${userData.username || "User"}</h3>
-              <p>Selamat! Akun Anda telah disetujui. Langkah terakhir, silakan verifikasi email Anda:</p>
-              <a href="${linkVerifikasi}" style="background:#007bff; color:white; padding:10px 20px; text-decoration:none; border-radius:5px;">Verifikasi Sekarang</a>
-              <p>Link berlaku selama 1 jam.</p>
-          `,
-    },
+  await EmailTemplates.send(email, "verification", {
+    username: userData.username,
+    link: linkVerifikasi,
   });
 
   return {
@@ -786,42 +772,12 @@ router.post("/request-reset-device", async (req, res) => {
     const resetLink = `${baseUrl}/api/Login/admin/confirm-reset-device?token=${resetActionToken}`;
 
     // D. Kirim Email (Dinamis sesuai targetEmail)
-    await db.collection("mail").add({
-      to: targetEmail,
-      message: {
-        subject: emailSubject,
-        html: `
-          <div style="font-family: sans-serif; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
-              <h2 style="color: #d32f2f;">Permohonan Reset Perangkat</h2>
-              <p>${emailGreeting}</p>
-              ${emailBodyIntro}
-              
-              <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
-                  <strong>Alasan:</strong><br>
-                  "${reason}"
-                  <br><br>
-                  <strong>Perangkat Lama:</strong><br>
-                  ${userData.deviceInfo || "Unknown Device"}
-              </div>
-
-              <p>Jika ${
-                userData.idCompany ? "Anda menyetujui" : "ini benar Anda"
-              }, silakan klik tombol di bawah ini. Device lama akan dihapus dari sistem, dan user dapat login di device baru.</p>
-
-              <a href="${resetLink}" style="background-color: #d32f2f; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">
-                  ${
-                    userData.idCompany
-                      ? "SETUJUI & RESET DEVICE"
-                      : "KONFIRMASI RESET SAYA"
-                  }
-              </a>
-
-              <p style="margin-top: 20px; font-size: 12px; color: #666;">
-                  Link ini aman dan hanya berlaku selama 3 hari. Jangan bagikan email ini ke orang lain.
-              </p>
-          </div>
-        `,
-      },
+    await EmailTemplates.send(targetEmail, "reset_device", {
+      username: userData.username,
+      reason: reason,
+      deviceInfo: userData.deviceInfo,
+      link: resetLink,
+      isAdmin: !!userData.idCompany, // Flag untuk ganti teks di template jika perlu
     });
 
     return res.status(200).json({
@@ -965,7 +921,9 @@ router.post("/login-google-admin", async (req, res) => {
         .verifyIdToken(idToken.toString().trim());
     } catch (error) {
       console.error("Firebase Auth Error:", error);
-      return res.status(401).json({ message: "Sesi Google tidak valid atau kedaluwarsa." });
+      return res
+        .status(401)
+        .json({ message: "Sesi Google tidak valid atau kedaluwarsa." });
     }
 
     const email = decodedToken.email;
@@ -974,8 +932,8 @@ router.post("/login-google-admin", async (req, res) => {
 
     // --- C. Cek User Exists ---
     if (!userDoc.exists) {
-      return res.status(404).json({ 
-        message: "Akun tidak ditemukan. Admin harus terdaftar di sistem." 
+      return res.status(404).json({
+        message: "Akun tidak ditemukan. Admin harus terdaftar di sistem.",
       });
     }
 
@@ -1009,7 +967,7 @@ router.post("/login-google-admin", async (req, res) => {
       role: data.role,
       idCompany: data.idCompany,
       status: data.status,
-      loginType: "web-admin" // Tambahan flag supaya tahu ini login dari web
+      loginType: "web-admin", // Tambahan flag supaya tahu ini login dari web
     };
 
     const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, {
@@ -1044,25 +1002,31 @@ router.post("/register-faceid", verifyToken, async (req, res) => {
 
     // 1. Validasi Akses & Input
     if (!["admin", "staff"].includes(user.role)) {
-      return res.status(403).json({ message: "Hanya Admin & Staff yang boleh mendaftarkan Face ID." });
+      return res.status(403).json({
+        message: "Hanya Admin & Staff yang boleh mendaftarkan Face ID.",
+      });
     }
 
     if (!user.idCompany) {
-      return res.status(400).json({ message: "ID Company tidak ditemukan pada profil Anda." });
+      return res
+        .status(400)
+        .json({ message: "ID Company tidak ditemukan pada profil Anda." });
     }
 
     if (!userName || !userEmail || !faceImages || !Array.isArray(faceImages)) {
-      return res.status(400).json({ 
-        message: "Data tidak lengkap. Pastikan nama, email, dan array gambar sudah benar." 
+      return res.status(400).json({
+        message:
+          "Data tidak lengkap. Pastikan nama, email, dan array gambar sudah benar.",
       });
     }
 
     // Validasi isi array faceImages
     // Ekspektasi faceImages: [{ fileId: "abc", fileUrl: "https://..." }, ...]
-    const isValidImages = faceImages.every(img => img.fileId && img.fileUrl);
+    const isValidImages = faceImages.every((img) => img.fileId && img.fileUrl);
     if (!isValidImages) {
-      return res.status(400).json({ 
-        message: "Format faceImages tidak valid. Setiap item harus memiliki fileId dan fileUrl." 
+      return res.status(400).json({
+        message:
+          "Format faceImages tidak valid. Setiap item harus memiliki fileId dan fileUrl.",
       });
     }
 
@@ -1101,15 +1065,14 @@ router.post("/register-faceid", verifyToken, async (req, res) => {
       message: "Registrasi Face ID berhasil disimpan.",
       data: {
         id: docRef.id,
-        ...newFaceIdData
-      }
+        ...newFaceIdData,
+      },
     });
-
   } catch (error) {
     console.error("Face ID Registration Error:", error);
-    return res.status(500).json({ 
-      message: "Terjadi kesalahan pada server.", 
-      error: error.message 
+    return res.status(500).json({
+      message: "Terjadi kesalahan pada server.",
+      error: error.message,
     });
   }
 });
