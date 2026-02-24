@@ -447,8 +447,8 @@ router.get("/confirm-email", async (req, res) => {
     // 4. Tampilkan Halaman HTML sederhana
     res.send(`
       <html>
-        <body style="text-align:center; padding-top:50px; font-family:sans-serif;">
-          <h1 style="color:green;">Verifikasi Berhasil!</h1>
+        <body style="text-align:center; padding-top:100px; font-family:sans-serif;">
+          <h1 style="color:#4f46e5;">Verifikasi Berhasil!</h1>
           <p>Akun Anda (${email}) sudah aktif.</p>
           <p>Silakan kembali ke aplikasi untuk Login.</p>
         </body>

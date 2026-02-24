@@ -8,12 +8,12 @@ const { db } = require("../config/firebase");
 class EmailTemplates {
   static getHeader() {
     // Gunakan URL absolut untuk gambar agar muncul di email client
-    const logoUrl = "../../public/admin/Vorce_LogoWithName.svg";
+    const logoUrl = "https://cdn.vorce.id/Assets/Vorce_LogoWithName.png";
     return `
             <div style="background-color: #f3f4f6; padding: 20px; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
                 <div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
-                    <div style="background-color: #4f46e5; padding: 25px; text-align: center;">
-                        <h1 style="color: white; margin: 0; font-size: 24px;">VORCE</h1>
+                    <div style="background-color: #4f46e5; padding: 20px; text-align: center; padding-left: 70px;">
+                        <img src="${logoUrl}" alt="Vorce Logo" style="height: 40px; width: auto; display: block; margin: 0 auto;" />
                     </div>
                     <div style="padding: 30px; color: #374151; line-height: 1.6;">
         `;
