@@ -99,6 +99,94 @@ class EmailTemplates {
                 `;
         break;
 
+      case "employee_approved":
+        defaultSubject = `Selamat! Anda Diterima di ${companyName || "Perusahaan"}`;
+        content = `
+                    <h2 style="color: #059669; margin-top: 0;">Selamat Bergabung! 🎉</h2>
+                    <p>Halo <b>${username}</b>,</p>
+                    <p>Lamaran Anda untuk bergabung dengan <b>${companyName || "Perusahaan"}</b> telah <b style="color: #059669;">DISETUJUI</b>.</p>
+                    <div style="background: #ecfdf5; border-left: 4px solid #059669; padding: 15px; margin: 20px 0; border-radius: 4px;">
+                        <p style="margin: 0;">Status akun Anda sekarang: <b>Karyawan (Staff)</b></p>
+                    </div>
+                    <p>Silakan login kembali ke aplikasi untuk mulai bekerja.</p>
+                `;
+        break;
+
+      case "employee_rejected":
+        defaultSubject = "Update Status Lamaran";
+        content = `
+                    <h2 style="color: #111827; margin-top: 0;">Pemberitahuan Status Lamaran</h2>
+                    <p>Halo <b>${username}</b>,</p>
+                    <p>Mohon maaf, saat ini kami belum bisa menerima lamaran Anda.</p>
+                    <div style="background: #fef2f2; border-left: 4px solid #dc2626; padding: 15px; margin: 20px 0; border-radius: 4px;">
+                        <p style="margin: 0;">Status: <b style="color: #dc2626;">Ditolak</b></p>
+                    </div>
+                    <p>Tetap semangat dan jangan menyerah! 💪</p>
+                `;
+        break;
+
+      case "employee_fired":
+        defaultSubject = `Pemberitahuan Penghentian Kerja - ${companyName}`;
+        content = `
+                    <h2 style="color: #dc2626; margin-top: 0;">Pemberitahuan Penghentian Kerja</h2>
+                    <p>Halo <b>${username}</b>,</p>
+                    <p>Melalui email ini, kami menginformasikan bahwa akses kerja Anda di <b>${companyName}</b> telah <b style="color: #dc2626;">DICABUT</b>.</p>
+                    <div style="background: #fef2f2; border-left: 4px solid #dc2626; padding: 15px; margin: 20px 0; border-radius: 4px;">
+                        <p style="margin: 0 0 5px 0;"><strong>Alasan Pengeluaran:</strong></p>
+                        <p style="margin: 0; font-style: italic;">"${reason || "Tidak ada alasan yang diberikan"}"</p>
+                    </div>
+                    <p>Jika Anda merasa ini adalah kesalahan, silakan hubungi manajemen perusahaan.</p>
+                    <p>Terima kasih atas kontribusi Anda selama ini.</p>
+                `;
+        break;
+
+      case "invite":
+        defaultSubject = `Undangan Bergabung - ${companyName}`;
+        content = `
+                    <h2 style="color: #4f46e5; margin-top: 0;">Anda Diundang! ✉️</h2>
+                    <p>Anda diundang oleh <b>${data.inviterName || "Admin"}</b> untuk bergabung ke <b>${companyName}</b>.</p>
+                    <p>Untuk menerima undangan ini, silakan klik tombol di bawah, lalu:</p>
+                    <ol style="line-height: 2;">
+                        <li>Login menggunakan Akun Google (Email: ${data.targetEmail || "email Anda"})</li>
+                        <li>Lengkapi data diri (No Telp & WA)</li>
+                    </ol>
+                    <div style="text-align: center; margin: 30px 0;">
+                        <a href="${link}" style="background-color: #4f46e5; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Buka Undangan</a>
+                    </div>
+                    <p style="font-size: 13px; color: #9ca3af;">Link undangan berlaku selama 24 jam.</p>
+                `;
+        break;
+
+      case "upgrade":
+        defaultSubject = `Upgrade Paket Berhasil - ${companyName}`;
+        content = `
+                    <h2 style="color: #4f46e5; margin-top: 0;">Upgrade Berhasil! 🚀</h2>
+                    <p>Halo Admin <b>${companyName}</b>,</p>
+                    <p>Paket layanan Anda telah berhasil diperbarui oleh sistem kami.</p>
+                    <div style="background: #f3f4f6; padding: 20px; border-radius: 8px; margin: 25px 0;">
+                        <ul style="margin: 0; padding-left: 20px; line-height: 2;">
+                            <li><b>Max Storage:</b> ${data.maxStorageDisplay || "Tidak Berubah"}</li>
+                            <li><b>Max Karyawan:</b> ${data.maxKaryawanDisplay || "Tidak Berubah"}</li>
+                        </ul>
+                    </div>
+                    <p>Selamat menikmati layanan Vorce dengan kapasitas lebih besar.</p>
+                `;
+        break;
+
+      case "report":
+        defaultSubject = data.subject || `Laporan - ${companyName}`;
+        content = `
+                    <h2 style="color: #2c3e50; margin-top: 0;">📊 ${data.reportTitle || "Laporan"}</h2>
+                    <p>Perusahaan: <strong>${companyName}</strong></p>
+                    <p>Periode: <strong>${data.periode || "-"}</strong></p>
+                    <p>Laporan Anda telah berhasil di-generate. Silakan klik tombol di bawah untuk mengunduh file Excel:</p>
+                    <div style="text-align: center; margin: 30px 0;">
+                        <a href="${link}" target="_blank" style="background-color: #059669; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">📥 Download Laporan Excel</a>
+                    </div>
+                    <p style="font-size: 13px; color: #9ca3af;">File akan diunduh dalam format .xlsx yang dapat dibuka dengan Microsoft Excel atau Google Sheets.</p>
+                `;
+        break;
+
       default:
         content = `<h2>Halo ${username || "User"},</h2><p>${message}</p>`;
     }

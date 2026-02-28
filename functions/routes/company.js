@@ -6,6 +6,7 @@ const { Timestamp, FieldValue } = require("firebase-admin/firestore");
 const { db, bucket } = require("../config/firebase");
 const { verifyToken } = require("../middleware/token");
 const { logCompanyActivity } = require("../helper/logCompanyActivity");
+const EmailTemplates = require("../helper/emailHelper");
 const { auth } = require("firebase-admin");
 const router = express.Router();
 const crypto = require("crypto");
@@ -94,20 +95,10 @@ router.post("/verify-employee", verifyToken, async (req, res) => {
         description: `Admin ${adminData.nama} menerima pegawai baru: ${targetData.username}`,
       });
 
-      // C. Kirim Email DITERIMA (Format Lengkap)
-      await db.collection("mail").add({
-        to: targetEmail,
-        message: {
-          subject: `Selamat! Anda Diterima di ${adminData.companyName || "Perusahaan"}`,
-          html: `
-              <h3>Halo, ${targetData.username}</h3>
-              <p>Selamat! Lamaran Anda untuk bergabung dengan <b>${targetData.companyName || "Perusahaan Kami"}</b> telah <b>DISETUJUI</b>.</p>
-              <p>Sekarang status akun Anda adalah <b>Karyawan (Staff)</b>.</p>
-              <p>Silakan login kembali ke aplikasi.</p>
-              <br>
-              <p>Salam,<br>Admin HR</p>
-            `,
-        },
+      // C. Kirim Email DITERIMA (via EmailHelper)
+      await EmailTemplates.send(targetEmail, "employee_approved", {
+        username: targetData.username,
+        companyName: targetData.companyName || adminData.companyName || "Perusahaan",
       });
 
       return res.status(200).json({ message: `Pegawai ${targetEmail} berhasil diterima.` });
@@ -132,19 +123,9 @@ router.post("/verify-employee", verifyToken, async (req, res) => {
         description: `Admin ${adminData.nama} menolak lamaran dari: ${targetData.username}`,
       });
 
-      // C. Kirim Email DITOLAK (Format Lengkap)
-      await db.collection("mail").add({
-        to: targetEmail,
-        message: {
-          subject: `Update Status Lamaran`,
-          html: `
-              <h3>Halo, ${targetData.username}</h3>
-              <p>Mohon maaf, saat ini kami belum bisa menerima lamaran Anda (Status: <b>Ditolak</b>).</p>
-              <p>Tetap semangat.</p>
-              <br>
-              <p>Salam,<br>Tim HR</p>
-            `,
-        },
+      // C. Kirim Email DITOLAK (via EmailHelper)
+      await EmailTemplates.send(targetEmail, "employee_rejected", {
+        username: targetData.username,
       });
 
       return res.status(200).json({ message: `Pegawai ${targetEmail} telah ditolak.` });
@@ -205,24 +186,11 @@ router.post("/fire-employee", verifyToken, async (req, res) => {
       description: `Admin ${actor.nama} mengeluarkan ${targetData.username}. Alasan: ${finalReason}`,
     });
 
-    // Kirim Email Pemberitahuan
-    await db.collection("mail").add({
-      to: targetEmail,
-      message: {
-        subject: `Pemberitahuan Penghentian Kerja - ${companyData.namaPerusahaan}`,
-        html: `
-              <h3>Halo, ${targetData.username}</h3>
-              <p>Melalui email ini, kami menginformasikan bahwa akses kerja Anda di <b>${companyData.namaPerusahaan}</b> telah <b>DICABUT</b>.</p>
-              
-              <div style="background-color: #f8d7da; padding: 15px; border-radius: 5px; color: #721c24;">
-                <strong>Alasan Pengeluaran:</strong><br>
-                "${finalReason}"
-              </div>
-  
-              <p>Jika Anda merasa ini adalah kesalahan, silakan hubungi manajemen perusahaan.</p>
-              <p>Terima kasih atas kontribusi Anda selama ini.</p>
-            `,
-      },
+    // Kirim Email Pemberitahuan (via EmailHelper)
+    await EmailTemplates.send(targetEmail, "employee_fired", {
+      username: targetData.username,
+      companyName: companyData.namaPerusahaan,
+      reason: finalReason,
     });
 
     return res.status(200).json({ message: `Pegawai ${targetEmail} berhasil dikeluarkan.` });
@@ -658,27 +626,14 @@ router.post("/send-invite", verifyToken, async (req, res) => {
         description: `Admin ${adminData.nama || "Admin"} mengirim undangan ke ${targetEmail}`,
       });
   
-      // F. Kirim Email
+      // F. Kirim Email (via EmailHelper)
       const inviteLink = `https://hora-7394b.web.app/join/?code=${inviteCode}`;
       
-      await db.collection("mail").add({
-        to: targetEmail,
-        message: {
-          subject: `Undangan Bergabung - ${companyName}`,
-          html: `
-            <h3>Halo!</h3>
-            <p>Anda diundang oleh <b>${adminData.nama || "Admin"}</b> untuk bergabung ke <b>${companyName}</b>.</p>
-            <p>Untuk menerima undangan ini, silakan klik link di bawah, lalu:</p>
-            <ol>
-              <li>Login menggunakan Akun Google (Email: ${targetEmail})</li>
-              <li>Lengkapi data diri (No Telp & WA)</li>
-            </ol>
-            <br>
-            <a href="${inviteLink}" style="background:#28a745; color:white; padding:12px 24px; text-decoration:none; border-radius:5px; display:inline-block;">
-               Buka Undangan
-            </a>
-          `,
-        },
+      await EmailTemplates.send(targetEmail, "invite", {
+        companyName: companyName,
+        inviterName: adminData.nama || "Admin",
+        targetEmail: targetEmail,
+        link: inviteLink,
       });
   
       return res.status(200).json({ message: `Undangan berhasil dikirim ke ${targetEmail}` });
