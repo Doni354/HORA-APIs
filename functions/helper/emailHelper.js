@@ -173,6 +173,26 @@ class EmailTemplates {
                 `;
         break;
 
+      case "company_deleted":
+        defaultSubject = `Pemberitahuan Penghapusan Perusahaan - ${companyName}`;
+        content = `
+                    <h2 style="color: #dc2626; margin-top: 0;">⚠️ Perusahaan Dihapus</h2>
+                    <p>Halo <b>${username}</b>,</p>
+                    <p>Kami menginformasikan bahwa perusahaan <b>${companyName}</b> telah <b style="color: #dc2626;">DIHAPUS</b> dari sistem oleh pemiliknya.</p>
+                    <div style="background: #fef2f2; border-left: 4px solid #dc2626; padding: 15px; margin: 20px 0; border-radius: 4px;">
+                        <p style="margin: 0 0 5px 0;"><strong>Dihapus oleh:</strong></p>
+                        <p style="margin: 0;">${data.adminEmail || "Admin"}</p>
+                    </div>
+                    <p>Akibatnya:</p>
+                    <ul style="line-height: 2;">
+                        <li>Status kepegawaian Anda telah <b>dicabut</b></li>
+                        <li>Seluruh data perusahaan telah dihapus secara permanen</li>
+                    </ul>
+                    <p>Anda dapat mendaftar kembali ke perusahaan lain melalui aplikasi Vorce.</p>
+                    <p>Terima kasih atas kontribusi Anda selama ini. 🙏</p>
+                `;
+        break;
+
       case "report":
         defaultSubject = data.subject || `Laporan - ${companyName}`;
         content = `

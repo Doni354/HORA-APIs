@@ -895,5 +895,195 @@ router.get("/public-link", verifyToken, async (req, res) => {
     }
   });
 
+// ---------------------------------------------------------
+// DELETE COMPANY (Owner Only - Nuclear Option)
+// ---------------------------------------------------------
+const { S3Client, ListObjectsV2Command, DeleteObjectCommand } = require("@aws-sdk/client-s3");
+const { r2 } = require("../config/r2");
+const R2_BUCKET = "vorce";
+
+/**
+ * Helper: Hapus seluruh dokumen di dalam sub-collection secara batch
+ */
+async function deleteCollection(collectionRef, batchSize = 100) {
+  let totalDeleted = 0;
+  let snapshot = await collectionRef.limit(batchSize).get();
+
+  while (!snapshot.empty) {
+    const batch = db.batch();
+    snapshot.docs.forEach((doc) => batch.delete(doc.ref));
+    await batch.commit();
+    totalDeleted += snapshot.size;
+    snapshot = await collectionRef.limit(batchSize).get();
+  }
+
+  return totalDeleted;
+}
+
+router.delete("/delete-company", verifyToken, async (req, res) => {
+  try {
+    const actor = req.user;
+
+    // 1. Validasi: User harus punya company
+    if (!actor.idCompany) {
+      return res.status(400).json({ message: "Anda tidak terikat dengan perusahaan manapun." });
+    }
+
+    // 2. Ambil data perusahaan
+    const companyRef = db.collection("companies").doc(actor.idCompany);
+    const companyDoc = await companyRef.get();
+
+    if (!companyDoc.exists) {
+      return res.status(404).json({ message: "Perusahaan tidak ditemukan." });
+    }
+
+    const companyData = companyDoc.data();
+    const companyName = companyData.namaPerusahaan || "Perusahaan";
+
+    // 3. Cek Kepemilikan: Hanya createdBy (owner) yang boleh hapus
+    if (companyData.createdBy !== actor.email) {
+      return res.status(403).json({
+        message: "DILARANG: Hanya pemilik perusahaan (Owner) yang bisa menghapus perusahaan.",
+      });
+    }
+
+    const idCompany = actor.idCompany;
+
+    // ==============================================================
+    // STEP 1: KICK SEMUA EMPLOYEES & KIRIM EMAIL
+    // ==============================================================
+    const usersSnapshot = await db
+      .collection("users")
+      .where("idCompany", "==", idCompany)
+      .get();
+
+    const emailPromises = [];
+    const resetBatch = db.batch();
+    let totalKaryawan = 0;
+
+    usersSnapshot.forEach((doc) => {
+      const userData = doc.data();
+      totalKaryawan++;
+
+      // Reset user fields
+      resetBatch.update(doc.ref, {
+        role: "rejected",
+        status: "company_deleted",
+        idCompany: null,
+        companyName: null,
+        currentDeviceId: null,
+        companyDeletedAt: Timestamp.now(),
+        companyDeletedBy: actor.email,
+      });
+
+      // Kirim email notifikasi ke setiap karyawan
+      emailPromises.push(
+        EmailTemplates.send(doc.id, "company_deleted", {
+          username: userData.username || userData.nama || "User",
+          companyName: companyName,
+          adminEmail: actor.email,
+        }).catch((err) => console.error(`Gagal kirim email ke ${doc.id}:`, err))
+      );
+    });
+
+    // Commit reset semua user
+    if (totalKaryawan > 0) {
+      await resetBatch.commit();
+    }
+
+    // Kirim semua email secara paralel (fire-and-forget, error di-catch per email)
+    await Promise.allSettled(emailPromises);
+
+    // ==============================================================
+    // STEP 2: HAPUS SEMUA FILE DARI R2 STORAGE
+    // ==============================================================
+    try {
+      const prefix = `company_files/${idCompany}/`;
+      let continuationToken = undefined;
+
+      do {
+        const listCommand = new ListObjectsV2Command({
+          Bucket: R2_BUCKET,
+          Prefix: prefix,
+          ContinuationToken: continuationToken,
+        });
+
+        const listResult = await r2.send(listCommand);
+
+        if (listResult.Contents && listResult.Contents.length > 0) {
+          const deletePromises = listResult.Contents.map((obj) =>
+            r2.send(
+              new DeleteObjectCommand({
+                Bucket: R2_BUCKET,
+                Key: obj.Key,
+              })
+            ).catch((err) => console.warn(`Gagal hapus R2 object ${obj.Key}:`, err))
+          );
+          await Promise.allSettled(deletePromises);
+        }
+
+        continuationToken = listResult.IsTruncated
+          ? listResult.NextContinuationToken
+          : undefined;
+      } while (continuationToken);
+    } catch (r2Error) {
+      console.error("R2 Cleanup Error (non-fatal):", r2Error);
+      // Lanjutkan proses meski R2 gagal
+    }
+
+    // ==============================================================
+    // STEP 3: HAPUS SEMUA SUB-COLLECTIONS PERUSAHAAN
+    // ==============================================================
+    const subCollections = ["files", "logs", "leaves", "tasks"];
+
+    for (const subCol of subCollections) {
+      try {
+        await deleteCollection(companyRef.collection(subCol));
+      } catch (err) {
+        console.error(`Gagal hapus sub-collection ${subCol}:`, err);
+      }
+    }
+
+    // ==============================================================
+    // STEP 4: HAPUS DOCUMENT PERUSAHAAN
+    // ==============================================================
+    await companyRef.delete();
+
+    // ==============================================================
+    // STEP 5: LOG KE SUPER ADMIN LOGS
+    // ==============================================================
+    // Log utama: DELETE_COMPANY
+    await db.collection("super_admin_logs").add({
+      action: "DELETE_COMPANY",
+      actor: actor.email,
+      details: `Menghapus perusahaan '${companyName}' (${idCompany}) dan semua datanya. ${totalKaryawan} karyawan di-kick.`,
+      timestamp: Timestamp.now(),
+    });
+
+    // Log email yang dikirim
+    for (const doc of usersSnapshot.docs) {
+      const userData = doc.data();
+      await db.collection("super_admin_logs").add({
+        action: "SEND_EMAIL",
+        actor: actor.email,
+        details: `Sent email 'Pemberitahuan Penghapusan Perusahaan - ${companyName}' to ${doc.id}`,
+        timestamp: Timestamp.now(),
+      });
+    }
+
+    return res.status(200).json({
+      message: `Perusahaan '${companyName}' berhasil dihapus beserta seluruh datanya.`,
+      summary: {
+        companyDeleted: idCompany,
+        employeesKicked: totalKaryawan,
+        subCollectionsCleaned: subCollections,
+      },
+    });
+  } catch (e) {
+    console.error("Delete Company Error:", e);
+    return res.status(500).json({ message: "Server Error", error: e.message });
+  }
+});
+
   
 module.exports = router;
