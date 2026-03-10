@@ -1,11 +1,14 @@
 /* eslint-disable */
 const express = require("express");
+const admin = require("firebase-admin");
+const jwt = require("jsonwebtoken");
 const { db } = require("../config/firebase");
 const { verifyToken } = require("../middleware/token");
 const { uploadFile } = require("../helper/uploadFile");
 const router = express.Router();
 const { Timestamp } = require("firebase-admin/firestore");
 const { logCompanyActivity } = require("../helper/logCompanyActivity");
+const EmailTemplates = require("../helper/emailHelper");
 // =========================================================
 // EMPLOYEE MANAGEMENT
 // =========================================================
@@ -504,7 +507,7 @@ router.put("/change-email", verifyToken, async (req, res) => {
   }
 });
 
-// 9. DELETE ACCOUNT
+// 9. DELETE ACCOUNT (SOFT DELETE - 90 Day Grace Period)
 router.delete("/account", verifyToken, async (req, res) => {
   try {
     const email = req.user.email;
@@ -517,13 +520,181 @@ router.delete("/account", verifyToken, async (req, res) => {
       });
     }
 
-    await db.collection("users").doc(email).delete();
+    // Ambil data user untuk username & uid
+    const userRef = db.collection("users").doc(email);
+    const userDoc = await userRef.get();
 
-    return res
-      .status(200)
-      .json({ message: "Akun Anda berhasil dihapus selamanya." });
+    if (!userDoc.exists) {
+      return res.status(404).json({ message: "User tidak ditemukan." });
+    }
+
+    const userData = userDoc.data();
+
+    // Cek apakah sudah dalam proses penghapusan
+    if (userData.status === "pending_deletion") {
+      return res.status(400).json({
+        message: "Akun sudah dalam proses penghapusan.",
+        deletionScheduledAt: userData.deletionScheduledAt,
+      });
+    }
+
+    // Hitung tanggal penghapusan (90 hari dari sekarang)
+    const now = Date.now();
+    const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
+    const deletionDate = new Date(now + NINETY_DAYS_MS);
+    const deletionScheduledAt = Timestamp.fromMillis(now + NINETY_DAYS_MS);
+
+    // Format tanggal untuk email (contoh: "8 Juni 2026")
+    const deletionDateFormatted = deletionDate.toLocaleDateString("id-ID", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    });
+
+    // Generate recovery token (berlaku 90 hari)
+    const recoveryToken = jwt.sign(
+      {
+        action: "ACCOUNT_RECOVERY",
+        email: email,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "90d" }
+    );
+
+    // Update status user ke pending_deletion + reset device
+    await userRef.update({
+      status: "pending_deletion",
+      deletionRequestedAt: Timestamp.now(),
+      deletionScheduledAt: deletionScheduledAt,
+      recoveryToken: recoveryToken,
+      currentDeviceId: null, // Reset device agar HP bisa dipakai akun lain
+    });
+
+    // Kirim email notifikasi + link recovery
+    const baseUrl = "https://api-y4ntpb3uvq-et.a.run.app";
+    const recoveryLink = `${baseUrl}/api/profile/recover-account?token=${recoveryToken}`;
+
+    await EmailTemplates.send(email, "account_deletion", {
+      username: userData.username || email.split("@")[0],
+      deletionDate: deletionDateFormatted,
+      link: recoveryLink,
+    });
+
+    return res.status(200).json({
+      message: "Akun dijadwalkan untuk dihapus.",
+      info: `Akun akan dihapus permanen pada ${deletionDateFormatted}. Cek email untuk membatalkan.`,
+      deletionScheduledAt: deletionScheduledAt,
+    });
   } catch (e) {
-    return res.status(500).json({ message: "Gagal menghapus akun" });
+    console.error("Soft Delete Account Error:", e);
+    return res.status(500).json({ message: "Gagal memproses penghapusan akun" });
+  }
+});
+
+// 10. RECOVER ACCOUNT (Cancel Deletion - Link dari Email)
+router.get("/recover-account", async (req, res) => {
+  try {
+    const { token } = req.query;
+
+    if (!token) {
+      return res.status(400).send(`
+        <html><body style="text-align:center; padding-top:100px; font-family:sans-serif;">
+          <h1 style="color:#dc2626;">❌ Link Tidak Valid</h1>
+          <p>Token recovery tidak ditemukan.</p>
+        </body></html>
+      `);
+    }
+
+    // Verifikasi token
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (err) {
+      return res.status(403).send(`
+        <html><body style="text-align:center; padding-top:100px; font-family:sans-serif;">
+          <h1 style="color:#dc2626;">❌ Link Kadaluarsa</h1>
+          <p>Link recovery sudah tidak berlaku. Silakan hubungi support.</p>
+        </body></html>
+      `);
+    }
+
+    // Validasi action
+    if (decoded.action !== "ACCOUNT_RECOVERY") {
+      return res.status(403).send(`
+        <html><body style="text-align:center; padding-top:100px; font-family:sans-serif;">
+          <h1 style="color:#dc2626;">❌ Token Tidak Valid</h1>
+          <p>Token ini bukan untuk recovery akun.</p>
+        </body></html>
+      `);
+    }
+
+    const email = decoded.email;
+    const userRef = db.collection("users").doc(email);
+    const userDoc = await userRef.get();
+
+    if (!userDoc.exists) {
+      return res.status(404).send(`
+        <html><body style="text-align:center; padding-top:100px; font-family:sans-serif;">
+          <h1 style="color:#dc2626;">❌ Akun Tidak Ditemukan</h1>
+          <p>Akun sudah dihapus atau tidak ditemukan.</p>
+        </body></html>
+      `);
+    }
+
+    const userData = userDoc.data();
+
+    // Cek apakah memang sedang pending deletion
+    if (userData.status !== "pending_deletion") {
+      return res.status(400).send(`
+        <html><body style="text-align:center; padding-top:100px; font-family:sans-serif;">
+          <h1 style="color:#f59e0b;">⚠️ Akun Sudah Aktif</h1>
+          <p>Akun Anda (${email}) sudah aktif dan tidak dalam proses penghapusan.</p>
+        </body></html>
+      `);
+    }
+
+    // Restore akun ke status active
+    await userRef.update({
+      status: "active",
+      deletionRequestedAt: admin.firestore.FieldValue.delete(),
+      deletionScheduledAt: admin.firestore.FieldValue.delete(),
+      recoveryToken: admin.firestore.FieldValue.delete(),
+    });
+
+    // Tampilkan halaman sukses
+    res.status(200).send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+          <title>Akun Dipulihkan</title>
+          <style>
+              body { font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f0f2f5; margin: 0; }
+              .card { background: white; padding: 40px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: center; max-width: 500px; }
+              h1 { color: #059669; }
+              p { color: #555; line-height: 1.6; }
+              .icon { font-size: 60px; margin-bottom: 20px; }
+          </style>
+      </head>
+      <body>
+          <div class="card">
+              <div class="icon">✅</div>
+              <h1>Akun Berhasil Dipulihkan!</h1>
+              <p>Penghapusan akun <b>${email}</b> telah dibatalkan.</p>
+              <p>Akun Anda kembali aktif. Silakan login kembali ke aplikasi.</p>
+              <br>
+              <small>Anda dapat menutup halaman ini.</small>
+          </div>
+      </body>
+      </html>
+    `);
+  } catch (e) {
+    console.error("Recover Account Error:", e);
+    res.status(500).send(`
+      <html><body style="text-align:center; padding-top:100px; font-family:sans-serif;">
+        <h1 style="color:#dc2626;">❌ Server Error</h1>
+        <p>Terjadi kesalahan. Silakan coba lagi nanti.</p>
+      </body></html>
+    `);
   }
 });
 

@@ -56,6 +56,11 @@ router.put("/sendlink", async (req, res) => {
       return res.status(403).send("Akun Anda telah dinonaktifkan.");
     }
 
+    // 3. Jika akun dijadwalkan dihapus
+    if (userData.status === "pending_deletion") {
+      return res.status(403).send("Akun Anda dijadwalkan untuk dihapus. Cek email untuk membatalkan penghapusan.");
+    }
+
     // --- CEK COOLDOWN ---
     const now = Date.now();
     const prevExpire = userData.otpExpires?.toMillis?.() || 0;
@@ -173,6 +178,9 @@ const crypto = require("crypto");
 const checkUserStatus = (data) => {
   if (data.status === "inactive" || data.status === "banned") {
     return "Akun dinonaktifkan oleh sistem.";
+  }
+  if (data.status === "pending_deletion") {
+    return "ACCOUNT_PENDING_DELETION";
   }
   if (data.role === "candidate") {
     return "Akun sedang menunggu persetujuan Admin.";
@@ -343,6 +351,14 @@ router.post("/login-google", async (req, res) => {
     // --- D. Cek Status & Role (Panggil Helper) ---
     const statusError = checkUserStatus(data);
     if (statusError) {
+      // Handle khusus untuk pending_deletion
+      if (statusError === "ACCOUNT_PENDING_DELETION") {
+        return res.status(403).json({
+          message: "Akun Anda dijadwalkan untuk dihapus.",
+          error: "ACCOUNT_PENDING_DELETION",
+          info: "Cek email Anda untuk membatalkan penghapusan akun.",
+        });
+      }
       return res.status(403).json({ message: statusError });
     }
 
@@ -942,6 +958,14 @@ router.post("/login-google-admin", async (req, res) => {
     // --- D. Cek Status & Role ---
     const statusError = checkUserStatus(data);
     if (statusError) {
+      // Handle khusus untuk pending_deletion
+      if (statusError === "ACCOUNT_PENDING_DELETION") {
+        return res.status(403).json({
+          message: "Akun Anda dijadwalkan untuk dihapus.",
+          error: "ACCOUNT_PENDING_DELETION",
+          info: "Cek email Anda untuk membatalkan penghapusan akun.",
+        });
+      }
       return res.status(403).json({ message: statusError });
     }
 

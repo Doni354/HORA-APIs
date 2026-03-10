@@ -193,6 +193,25 @@ class EmailTemplates {
                 `;
         break;
 
+      case "account_deletion":
+        defaultSubject = "Pemberitahuan Penghapusan Akun - Vorce";
+        content = `
+                    <h2 style="color: #dc2626; margin-top: 0;">⚠️ Akun Anda Dijadwalkan untuk Dihapus</h2>
+                    <p>Halo <b>${username}</b>,</p>
+                    <p>Kami telah menerima permintaan penghapusan akun Anda. Akun akan <b style="color: #dc2626;">dihapus secara permanen</b> pada:</p>
+                    <div style="background: #fef2f2; border-left: 4px solid #dc2626; padding: 15px; margin: 20px 0; border-radius: 4px;">
+                        <p style="margin: 0; font-size: 18px; font-weight: bold; color: #dc2626;">${data.deletionDate}</p>
+                        <p style="margin: 5px 0 0 0; font-size: 13px; color: #6b7280;">(90 hari sejak permintaan penghapusan)</p>
+                    </div>
+                    <p>Setelah tanggal tersebut, seluruh data akun Anda akan dihapus dan <b>tidak dapat dipulihkan</b>.</p>
+                    <p>Jika Anda berubah pikiran, klik tombol di bawah untuk membatalkan penghapusan:</p>
+                    <div style="text-align: center; margin: 30px 0;">
+                        <a href="${link}" style="background-color: #059669; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">🔄 Batalkan Penghapusan</a>
+                    </div>
+                    <p style="font-size: 13px; color: #9ca3af;">Jika Anda tidak melakukan tindakan apapun, akun akan otomatis dihapus pada tanggal yang tertera di atas.</p>
+                `;
+        break;
+
       case "report":
         defaultSubject = data.subject || `Laporan - ${companyName}`;
         content = `

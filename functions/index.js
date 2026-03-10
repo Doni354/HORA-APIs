@@ -17,11 +17,17 @@ const inboxRoutes = require("./routes/inbox");
 const tugasRoutes = require("./routes/tugas");
 const reimburseRoutes = require("./routes/reimburse");
 const FCM = require("./FCM/fcm");
+const { scheduledAccountCleanup } = require("./scheduler/scheduler");
 // ---------------------------------------------------------
 // FCM
 // ---------------------------------------------------------
 // Export function
 exports.onNewCompanyMessage = FCM.onNewCompanyMessage;
+
+// ---------------------------------------------------------
+// SCHEDULER: Auto-delete expired accounts (daily 02:00 WIB)
+// ---------------------------------------------------------
+exports.scheduledAccountCleanup = scheduledAccountCleanup;
 
 // ---------------------------------------------------------
 // Cloud Functions Global Config
