@@ -568,6 +568,7 @@ router.delete("/account", verifyToken, async (req, res) => {
       deletionScheduledAt: deletionScheduledAt,
       recoveryToken: recoveryToken,
       currentDeviceId: null, // Reset device agar HP bisa dipakai akun lain
+      fcmTokens: [],         // Stop semua notifikasi
     });
 
     // Kirim email notifikasi + link recovery

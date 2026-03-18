@@ -972,6 +972,7 @@ router.delete("/delete-company", verifyToken, async (req, res) => {
         idCompany: null,
         companyName: null,
         currentDeviceId: null,
+        fcmTokens: [],           // Stop semua notifikasi perusahaan
         companyDeletedAt: Timestamp.now(),
         companyDeletedBy: actor.email,
       });

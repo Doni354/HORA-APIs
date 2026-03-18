@@ -16,8 +16,10 @@ const arsipRoutes = require("./routes/arsip");
 const inboxRoutes = require("./routes/inbox");
 const tugasRoutes = require("./routes/tugas");
 const reimburseRoutes = require("./routes/reimburse");
+const subscriptionRoutes = require("./routes/subscription");
 const FCM = require("./FCM/fcm");
 const { scheduledAccountCleanup } = require("./scheduler/scheduler");
+const { onPlayRtdn } = require("./scheduler/rtdn");
 // ---------------------------------------------------------
 // FCM
 // ---------------------------------------------------------
@@ -28,6 +30,11 @@ exports.onNewCompanyMessage = FCM.onNewCompanyMessage;
 // SCHEDULER: Auto-delete expired accounts (daily 02:00 WIB)
 // ---------------------------------------------------------
 exports.scheduledAccountCleanup = scheduledAccountCleanup;
+
+// ---------------------------------------------------------
+// PUB/SUB: Google Play RTDN (Real-time Developer Notifications)
+// ---------------------------------------------------------
+exports.onPlayRtdn = onPlayRtdn;
 
 // ---------------------------------------------------------
 // Cloud Functions Global Config
@@ -58,6 +65,7 @@ app.use("/api/arsip", arsipRoutes);
 app.use("/api/inbox", inboxRoutes);
 app.use("/api/tugas", tugasRoutes);
 app.use("/api/reimburse", reimburseRoutes);
+app.use("/api/subscription", subscriptionRoutes);
 // ---------------------------------------------------------
 // TEST
 // ---------------------------------------------------------

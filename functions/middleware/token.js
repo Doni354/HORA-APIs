@@ -67,7 +67,8 @@ const verifyToken = async (req, res, next) => {
       idCompany: userData.idCompany,
       status: userData.status,
       nama: userData.username,
-      deviceId: decoded.deviceId // Opsional: simpan juga deviceId di req
+      deviceId: decoded.deviceId, // Opsional: simpan juga deviceId di req
+      fcmToken: decoded.fcmTokens // FCM token dari JWT payload (untuk logout)
     };
 
     next();
