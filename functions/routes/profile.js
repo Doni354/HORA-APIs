@@ -561,15 +561,33 @@ router.delete("/account", verifyToken, async (req, res) => {
       { expiresIn: "90d" }
     );
 
-    // Update status user ke pending_deletion + reset device
+    // Update status user ke pending_deletion
+    // Simpan data company sebelumnya untuk recovery
+    // Kick dari company dengan set role "rejected"
     await userRef.update({
       status: "pending_deletion",
+      role: "rejected",                           // Kick dari company
       deletionRequestedAt: Timestamp.now(),
       deletionScheduledAt: deletionScheduledAt,
       recoveryToken: recoveryToken,
-      currentDeviceId: null, // Reset device agar HP bisa dipakai akun lain
-      fcmTokens: [],         // Stop semua notifikasi
+      currentDeviceId: null,
+      fcmTokens: [],
+      // Simpan data lama untuk recovery
+      previousRole: userData.role,
+      previousCompany: userData.idCompany || null,
+      previousCompanyName: userData.companyName || null,
     });
+
+    // Log ke company (jika punya perusahaan)
+    if (userData.idCompany) {
+      await logCompanyActivity(userData.idCompany, {
+        actorEmail: email,
+        actorName: userData.username || email,
+        target: email,
+        action: "EMPLOYEE_SELF_DELETE",
+        description: `Karyawan ${userData.username || email} telah menghapus akunnya. Akun akan dihapus permanen pada ${deletionDateFormatted}.`,
+      });
+    }
 
     // Kirim email notifikasi + link recovery
     const baseUrl = "https://api-y4ntpb3uvq-et.a.run.app";
@@ -654,13 +672,37 @@ router.get("/recover-account", async (req, res) => {
       `);
     }
 
-    // Restore akun ke status active
-    await userRef.update({
+    // Restore akun ke status active + kembalikan ke company
+    const restoreData = {
       status: "active",
+      role: userData.previousRole || "employee",         // Restore role lama
+      idCompany: userData.previousCompany || null,       // Restore company
+      companyName: userData.previousCompanyName || null,  // Restore company name
+      // Bersihkan field deletion & recovery
       deletionRequestedAt: admin.firestore.FieldValue.delete(),
       deletionScheduledAt: admin.firestore.FieldValue.delete(),
       recoveryToken: admin.firestore.FieldValue.delete(),
-    });
+      previousRole: admin.firestore.FieldValue.delete(),
+      previousCompany: admin.firestore.FieldValue.delete(),
+      previousCompanyName: admin.firestore.FieldValue.delete(),
+    };
+
+    await userRef.update(restoreData);
+
+    // Log ke company (jika dulu punya perusahaan)
+    if (userData.previousCompany) {
+      try {
+        await logCompanyActivity(userData.previousCompany, {
+          actorEmail: email,
+          actorName: userData.username || email,
+          target: email,
+          action: "EMPLOYEE_ACCOUNT_RECOVERED",
+          description: `Karyawan ${userData.username || email} telah memulihkan akunnya dan kembali bergabung.`,
+        });
+      } catch (logErr) {
+        console.error("Log recovery error (non-fatal):", logErr);
+      }
+    }
 
     // Tampilkan halaman sukses
     res.status(200).send(`

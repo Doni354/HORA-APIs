@@ -51,7 +51,29 @@ const scheduledAccountCleanup = onSchedule(
         const uid = userData.uid;
 
         try {
-          // 1. Hapus dari Firebase Auth (jika uid ada)
+          // 1. Log ke company (jika user punya perusahaan)
+          const companyId = userData.previousCompany || userData.idCompany;
+          if (companyId) {
+            try {
+              const { Timestamp: FsTimestamp } = require("firebase-admin/firestore");
+              await db
+                .collection("companies")
+                .doc(companyId)
+                .collection("logs")
+                .add({
+                  actorEmail: "system",
+                  actorName: "Sistem Otomatis",
+                  target: email,
+                  action: "EMPLOYEE_PERMANENT_DELETE",
+                  description: `Akun karyawan ${userData.username || email} telah dihapus permanen oleh sistem (90 hari setelah request).`,
+                  createdAt: FsTimestamp.now(),
+                });
+            } catch (logErr) {
+              console.error(`[Scheduler] ⚠️ Failed to log company activity for ${email}:`, logErr.message);
+            }
+          }
+
+          // 2. Hapus dari Firebase Auth (jika uid ada)
           if (uid) {
             try {
               await admin.auth().deleteUser(uid);
@@ -68,7 +90,7 @@ const scheduledAccountCleanup = onSchedule(
             }
           }
 
-          // 2. Hapus document user dari Firestore
+          // 3. Hapus document user dari Firestore
           await db.collection("users").doc(email).delete();
           console.log(`[Scheduler] ✅ Firestore deleted: ${email}`);
 
