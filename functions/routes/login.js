@@ -186,7 +186,7 @@ const checkUserStatus = (data) => {
     return "Akun sedang menunggu persetujuan Admin.";
   }
   if (data.role === "rejected") {
-    return "Lamaran Anda ditolak, silakan daftar kembali.";
+    return "Mohon untuk daftar kembali.";
   }
   return null; // OK
 };
@@ -277,15 +277,37 @@ const handleEmailVerification = async (db, userRef, userData, email) => {
   }
 
   // --- PROSES KIRIM EMAIL ---
-  const verifyToken = crypto.randomBytes(20).toString("hex");
-  const tokenExpires = Date.now() + 3600000; // 1 Jam
+  // Cek apakah token lama masih valid (belum expired)
+  // Jika masih valid, REUSE token lama supaya link di email sebelumnya tetap bisa dipakai
+  let verifyToken;
+  let tokenExpires;
 
-  // Update DB
-  await userRef.update({
-    verifyToken: verifyToken,
-    verifyTokenExpires: tokenExpires,
-    lastVerifyEmailSentAt: Timestamp.now(),
-  });
+  const existingTokenValid =
+    userData.verifyToken &&
+    userData.verifyTokenExpires &&
+    userData.verifyTokenExpires > now;
+
+  if (existingTokenValid) {
+    // Reuse token lama
+    verifyToken = userData.verifyToken;
+    tokenExpires = userData.verifyTokenExpires;
+
+    // Update hanya cooldown timestamp
+    await userRef.update({
+      lastVerifyEmailSentAt: Timestamp.now(),
+    });
+  } else {
+    // Generate token baru
+    verifyToken = crypto.randomBytes(20).toString("hex");
+    tokenExpires = now + 3600000; // 1 Jam
+
+    // Update DB dengan token baru
+    await userRef.update({
+      verifyToken: verifyToken,
+      verifyTokenExpires: tokenExpires,
+      lastVerifyEmailSentAt: Timestamp.now(),
+    });
+  }
 
   // Kirim Email (Masuk collection 'mail')
   const linkVerifikasi = `https://api-y4ntpb3uvq-et.a.run.app/api/Login/confirm-email?email=${email}&token=${verifyToken}`;
@@ -380,6 +402,28 @@ router.post("/login-google", async (req, res) => {
     // SUKSES: Update DB & Generate Token
     // ==============================================================
 
+    // SECURITY: Bersihkan FCM token ini dari user lain
+    // Mencegah 1 token terdaftar di 2 akun (double notif)
+    const existingFcmUsers = await db
+      .collection("users")
+      .where("fcmTokens", "array-contains", FcmToken)
+      .get();
+
+    const fcmCleanupPromises = [];
+    existingFcmUsers.forEach((doc) => {
+      if (doc.id !== email) {
+        fcmCleanupPromises.push(
+          doc.ref.update({
+            fcmTokens: admin.firestore.FieldValue.arrayRemove(FcmToken),
+          })
+        );
+      }
+    });
+    if (fcmCleanupPromises.length > 0) {
+      await Promise.all(fcmCleanupPromises);
+      console.log(`Cleaned FCM token from ${fcmCleanupPromises.length} other user(s)`);
+    }
+
     // Update data login terakhir & kunci device
     await userRef.update({
       lastLogin: Timestamp.now(),
@@ -417,6 +461,36 @@ router.post("/login-google", async (req, res) => {
 });
 
 // ---------------------------------------------------------
+// LOGOUT (Release Device & Clean FCM Token)
+// ---------------------------------------------------------
+// Flutter FE cukup POST dengan Bearer Token, tanpa body
+// FCM token otomatis diambil dari JWT payload
+router.post("/logout", verifyToken, async (req, res) => {
+  try {
+    const email = req.user.email;
+    const fcmToken = req.user.fcmToken; // Dari JWT payload (decoded di middleware)
+
+    const userRef = db.collection("users").doc(email);
+    const updateData = {
+      currentDeviceId: null,
+      lastLogout: Timestamp.now(),
+    };
+
+    // Hapus FCM token yang tersimpan di JWT
+    if (fcmToken) {
+      updateData.fcmTokens = admin.firestore.FieldValue.arrayRemove(fcmToken);
+    }
+
+    await userRef.update(updateData);
+
+    return res.status(200).json({ message: "Logout berhasil." });
+  } catch (e) {
+    console.error("Logout Error:", e);
+    return res.status(500).json({ message: "Server Error" });
+  }
+});
+
+// ---------------------------------------------------------
 // CONFIRM EMAIL (Link Click Handler)
 // ---------------------------------------------------------
 router.get("/confirm-email", async (req, res) => {
@@ -437,10 +511,10 @@ router.get("/confirm-email", async (req, res) => {
     const data = userDoc.data();
 
     // 1. Validasi Token
-    if (data.verifyToken !== token) {
+    if (!data.verifyToken || data.verifyToken !== token) {
       return res
         .status(400)
-        .send("Link verifikasi salah atau sudah tidak valid.");
+        .send("Link verifikasi sudah tidak valid atau sudah pernah digunakan. Silakan login ulang di aplikasi untuk mendapatkan link baru.");
     }
 
     // 2. Validasi Expired
@@ -539,16 +613,18 @@ router.post("/registrasi", async (req, res) => {
 
       const companyRef = db.collection("companies").doc(idCompany);
 
-      // Setup Company dengan maxKaryawan: 10
+      // Setup Company dengan base limits (Free Tier)
+      // Base: 3 karyawan, 100MB storage
+      // Limit ini akan bertambah jika company membeli subscription
       transaction.set(companyRef, {
         idCompany,
         namaPerusahaan,
         alamatLoc,
         totalLike: 0,
-        // --- BATASAN SISTEM ---
-        maxKaryawan: 10, // Default: 10 Orang
-        maxStorage: 1024, // Default: 0 Bytes (Harus upgrade dulu baru bisa upload)
-        usedStorage: 0, // Terpakai: 0 Bytes
+        // --- BATASAN SISTEM (FREE TIER) ---
+        maxKaryawan: 3,          // Default: 3 Orang (base limit)
+        maxStorage: 104857600,   // Default: 100 MB in bytes (base limit)
+        usedStorage: 0,          // Terpakai: 0 Bytes
         createdAt: Timestamp.now(),
         createdBy: email,
         ownerUid: uid,
@@ -575,7 +651,7 @@ router.post("/registrasi", async (req, res) => {
       actorEmail: email,
       actorName: decodedToken.name || email,
       action: "REGISTER_COMPANY",
-      description: `Mendaftarkan perusahaan baru: ${namaPerusahaan} (Kuota: 10)`,
+      description: `Mendaftarkan perusahaan baru: ${namaPerusahaan} (Free Tier: 3 karyawan, 100MB storage)`,
     });
 
     return res.status(200).json({
@@ -583,7 +659,8 @@ router.post("/registrasi", async (req, res) => {
       data: {
         companyCode: idCompany,
         companyName: namaPerusahaan,
-        maxKaryawan: 10,
+        maxKaryawan: 3,
+        maxStorage: 104857600, // 100 MB
       },
     });
   } catch (e) {
@@ -852,7 +929,7 @@ router.get("/admin/confirm-reset-device", async (req, res) => {
 
     await targetUserRef.update({
       currentDeviceId: null,
-      // deviceInfo: admin.firestore.FieldValue.delete(), // Opsional
+      fcmTokens: [],  // Clear semua FCM tokens, user harus login ulang
       lastResetBy: "EmailConfirmation",
       lastResetAt: Timestamp.now(),
     });
