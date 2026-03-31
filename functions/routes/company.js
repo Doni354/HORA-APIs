@@ -543,6 +543,7 @@ router.get("/list", verifyToken, async (req, res) => {
       requestor: myEmail,
       total: allUsers.length,
       maxQuota: maxKaryawan,
+      deviceLockEnabled: companyDoc.exists ? (companyDoc.data().deviceLockEnabled || false) : false,
       storage: {
         used: usedStorage,
         max: maxStorage,
@@ -896,6 +897,71 @@ router.get("/public-link", verifyToken, async (req, res) => {
   });
 
 // ---------------------------------------------------------
+// TOGGLE DEVICE LOCK (Admin Only)
+// ---------------------------------------------------------
+// Endpoint: POST /api/Company/toggle-device-lock
+// Headers: Authorization: Bearer <token_jwt_admin>
+// Body: { "enabled": true/false }
+// ---------------------------------------------------------
+router.post("/toggle-device-lock", verifyToken, async (req, res) => {
+  try {
+    const actor = req.user;
+
+    // 1. Hanya admin yang boleh
+    if (actor.role !== "admin") {
+      return res.status(403).json({ message: "Hanya Admin yang bisa mengubah pengaturan Device Lock." });
+    }
+
+    if (!actor.idCompany) {
+      return res.status(400).json({ message: "Anda tidak terikat dengan perusahaan manapun." });
+    }
+
+    const { enabled } = req.body;
+    if (typeof enabled !== "boolean") {
+      return res.status(400).json({ message: "Parameter 'enabled' (boolean) wajib diisi." });
+    }
+
+    const companyRef = db.collection("companies").doc(actor.idCompany);
+    const companyDoc = await companyRef.get();
+
+    if (!companyDoc.exists) {
+      return res.status(404).json({ message: "Perusahaan tidak ditemukan." });
+    }
+
+    // Update device lock setting
+    const updateData = { deviceLockEnabled: enabled };
+
+    // Jika diaktifkan dan belum ada deviceBindings, inisialisasi map kosong
+    if (enabled && !companyDoc.data().deviceBindings) {
+      updateData.deviceBindings = {};
+    }
+
+    // Jika dimatikan, bersihkan semua device bindings agar fresh start
+    if (!enabled) {
+      updateData.deviceBindings = {};
+    }
+
+    await companyRef.update(updateData);
+
+    // Log aktivitas
+    await logCompanyActivity(actor.idCompany, {
+      actorEmail: actor.email,
+      actorName: actor.nama || "Admin",
+      action: enabled ? "ENABLE_DEVICE_LOCK" : "DISABLE_DEVICE_LOCK",
+      description: `Admin ${actor.nama || "Admin"} ${enabled ? "mengaktifkan" : "menonaktifkan"} fitur Device Lock.`,
+    });
+
+    return res.status(200).json({
+      message: `Fitur Device Lock berhasil ${enabled ? "diaktifkan" : "dinonaktifkan"}.`,
+      deviceLockEnabled: enabled,
+    });
+  } catch (e) {
+    console.error("Toggle Device Lock Error:", e);
+    return res.status(500).json({ message: "Server Error" });
+  }
+});
+
+// ---------------------------------------------------------
 // DELETE COMPANY (Owner Only - Nuclear Option)
 // ---------------------------------------------------------
 const { S3Client, ListObjectsV2Command, DeleteObjectCommand } = require("@aws-sdk/client-s3");
@@ -971,7 +1037,6 @@ router.delete("/delete-company", verifyToken, async (req, res) => {
         status: "company_deleted",
         idCompany: null,
         companyName: null,
-        currentDeviceId: null,
         fcmTokens: [],           // Stop semua notifikasi perusahaan
         companyDeletedAt: Timestamp.now(),
         companyDeletedBy: actor.email,

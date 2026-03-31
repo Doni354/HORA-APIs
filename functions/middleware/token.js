@@ -42,22 +42,25 @@ const verifyToken = async (req, res, next) => {
     const userData = userDoc.data();
 
     // ----------------------------------------------------------------------
-    // [BARU] LOGIC SINGLE SESSION (MENCEGAH DOUBLE LOGIN)
+    // [UPDATED] LOGIC SINGLE SESSION (VIA COMPANY DEVICE BINDINGS)
     // ----------------------------------------------------------------------
-    // decoded.deviceId = Device ID yang tersimpan di dalam Token (dari Login)
-    // userData.currentDeviceId = Device ID terakhir yang login di Database
-    
-    // Pengecekan:
-    // 1. Pastikan di database ada currentDeviceId (untuk backward compatibility)
-    // 2. Jika ada, bandingkan dengan yang di token.
-    if (userData.currentDeviceId && decoded.deviceId) {
-        if (userData.currentDeviceId !== decoded.deviceId) {
-            // Jika BEDA, berarti ada device baru yang login setelah token ini dibuat
-            return res.status(401).json({ 
-                message: "Sesi kadaluarsa. Akun Anda telah login di perangkat lain.",
-                forceLogout: true // Flag untuk Frontend
+    // Device lock sekarang disimpan di Company doc, bukan di User doc.
+    // Hanya enforce jika company mengaktifkan deviceLockEnabled.
+    if (userData.idCompany && decoded.deviceId) {
+      const companyDoc = await db.collection("companies").doc(userData.idCompany).get();
+      if (companyDoc.exists) {
+        const companyData = companyDoc.data();
+        if (companyData.deviceLockEnabled) {
+          const safeEmail = decoded.id.replace(/\./g, "_");
+          const boundDevice = (companyData.deviceBindings || {})[safeEmail];
+          if (boundDevice && boundDevice !== decoded.deviceId) {
+            return res.status(401).json({
+              message: "Sesi kadaluarsa. Akun Anda telah login di perangkat lain.",
+              forceLogout: true
             });
+          }
         }
+      }
     }
     // ----------------------------------------------------------------------
 

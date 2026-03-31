@@ -192,21 +192,30 @@ const checkUserStatus = (data) => {
 };
 
 /**
+ * Helper: Sanitize email untuk Firestore map key
+ * Firestore field path tidak boleh mengandung '.' karena dianggap nested field.
+ * Kita ganti '.' → '_' untuk key di deviceBindings map.
+ */
+const sanitizeEmailKey = (email) => email.replace(/\./g, "_");
+
+/**
  * Logic Anti-Curang Device (Strict Mode)
+ * Sekarang membaca dari companyData.deviceBindings (Map di doc company)
+ * bukan dari users.currentDeviceId.
  * Mengembalikan object { allowed: boolean, errorData: object }
  */
-const checkDeviceSecurity = async (
-  db,
-  userEmail,
-  userData,
-  incomingDeviceId
-) => {
-  // CEK 1: ACCOUNT LOCKING (Akun ini milik Device siapa?)
-  // Jika user sudah terikat device lain, tolak.
-  if (
-    userData.currentDeviceId &&
-    userData.currentDeviceId !== incomingDeviceId
-  ) {
+const checkDeviceSecurity = (companyData, userEmail, incomingDeviceId) => {
+  // Jika fitur device lock TIDAK aktif, langsung izinkan
+  if (!companyData || !companyData.deviceLockEnabled) {
+    return { allowed: true };
+  }
+
+  const bindings = companyData.deviceBindings || {};
+  const safeEmail = sanitizeEmailKey(userEmail);
+
+  // CEK 1: ACCOUNT LOCKING (Akun ini sudah terikat device lain?)
+  const boundDevice = bindings[safeEmail];
+  if (boundDevice && boundDevice !== incomingDeviceId) {
     return {
       allowed: false,
       errorData: {
@@ -218,19 +227,12 @@ const checkDeviceSecurity = async (
     };
   }
 
-  // CEK 2: DEVICE LOCKING (Device ini milik Siapa?)
-  // Cari apakah ada user LAIN yang sedang mengunci device ini.
-  const duplicateDeviceQuery = await db
-    .collection("users")
-    .where("currentDeviceId", "==", incomingDeviceId)
-    .get();
+  // CEK 2: DEVICE LOCKING (Device ini sudah dipakai user lain?)
+  const deviceOwner = Object.entries(bindings).find(
+    ([key, devId]) => devId === incomingDeviceId && key !== safeEmail
+  );
 
-  let deviceUsedByOther = false;
-  duplicateDeviceQuery.forEach((doc) => {
-    if (doc.id !== userEmail) deviceUsedByOther = true;
-  });
-
-  if (deviceUsedByOther) {
+  if (deviceOwner) {
     return {
       allowed: false,
       errorData: {
@@ -384,8 +386,16 @@ router.post("/login-google", async (req, res) => {
       return res.status(403).json({ message: statusError });
     }
 
-    // --- E. Cek Keamanan Device (Panggil Helper Anti-Curang) ---
-    const deviceCheck = await checkDeviceSecurity(db, email, data, deviceId);
+    // --- E. Cek Keamanan Device (dari Company doc) ---
+    let companyData = null;
+    if (data.idCompany) {
+      const companyDoc = await db.collection("companies").doc(data.idCompany).get();
+      if (companyDoc.exists) {
+        companyData = companyDoc.data();
+      }
+    }
+
+    const deviceCheck = checkDeviceSecurity(companyData, email, deviceId);
     if (!deviceCheck.allowed) {
       const { status, ...errJson } = deviceCheck.errorData;
       return res.status(status).json(errJson);
@@ -424,13 +434,20 @@ router.post("/login-google", async (req, res) => {
       console.log(`Cleaned FCM token from ${fcmCleanupPromises.length} other user(s)`);
     }
 
-    // Update data login terakhir & kunci device
+    // Update data login terakhir di user doc
     await userRef.update({
       lastLogin: Timestamp.now(),
-      currentDeviceId: deviceId,
       deviceInfo: deviceInfo || "Unknown",
       fcmTokens: admin.firestore.FieldValue.arrayUnion(FcmToken),
     });
+
+    // Update device binding di Company doc (selalu simpan untuk tracking)
+    // Enforcement (blokir) hanya terjadi jika deviceLockEnabled = true
+    if (data.idCompany) {
+      await db.collection("companies").doc(data.idCompany).update({
+        [`deviceBindings.${email.replace(/\./g, "_")}`]: deviceId,
+      });
+    }
 
     const tokenPayload = {
       id: email,
@@ -469,10 +486,10 @@ router.post("/logout", verifyToken, async (req, res) => {
   try {
     const email = req.user.email;
     const fcmToken = req.user.fcmToken; // Dari JWT payload (decoded di middleware)
+    const idCompany = req.user.idCompany;
 
     const userRef = db.collection("users").doc(email);
     const updateData = {
-      currentDeviceId: null,
       lastLogout: Timestamp.now(),
     };
 
@@ -482,6 +499,18 @@ router.post("/logout", verifyToken, async (req, res) => {
     }
 
     await userRef.update(updateData);
+
+    // Hapus device binding dari Company doc (jika ada)
+    if (idCompany) {
+      const companyRef = db.collection("companies").doc(idCompany);
+      const companyDoc = await companyRef.get();
+      if (companyDoc.exists && companyDoc.data().deviceLockEnabled) {
+        const safeEmail = email.replace(/\./g, "_");
+        await companyRef.update({
+          [`deviceBindings.${safeEmail}`]: admin.firestore.FieldValue.delete(),
+        });
+      }
+    }
 
     return res.status(200).json({ message: "Logout berhasil." });
   } catch (e) {
@@ -625,6 +654,9 @@ router.post("/registrasi", async (req, res) => {
         maxKaryawan: 3,          // Default: 3 Orang (base limit)
         maxStorage: 104857600,   // Default: 100 MB in bytes (base limit)
         usedStorage: 0,          // Terpakai: 0 Bytes
+        // --- DEVICE LOCK (Default OFF) ---
+        deviceLockEnabled: false,
+        deviceBindings: {},
         createdAt: Timestamp.now(),
         createdBy: email,
         ownerUid: uid,
@@ -927,21 +959,31 @@ router.get("/admin/confirm-reset-device", async (req, res) => {
         .send("<h1>Error: User sudah tidak terdaftar.</h1>");
     }
 
+    // Clear FCM tokens di user doc (user harus login ulang)
     await targetUserRef.update({
-      currentDeviceId: null,
-      fcmTokens: [],  // Clear semua FCM tokens, user harus login ulang
+      fcmTokens: [],
       lastResetBy: "EmailConfirmation",
       lastResetAt: Timestamp.now(),
     });
 
+    // Hapus device binding dari Company doc
+    if (companyId && companyId !== "INDIVIDUAL") {
+      const companyRef = db.collection("companies").doc(companyId);
+      const compSnap = await companyRef.get();
+      if (compSnap.exists) {
+        const safeEmail = targetUserEmail.replace(/\./g, "_");
+        await companyRef.update({
+          [`deviceBindings.${safeEmail}`]: admin.firestore.FieldValue.delete(),
+        });
+      }
+    }
+
     // --- LOG ACTIVITY: APPROVED ---
-    // Kita coba cari email admin dari company doc (agar log lebih rapi),
-    // tapi kalau gagal kita set default.
     let adminEmailForLog = "system";
     let adminNameForLog = "Admin (via Email)";
 
     try {
-      if (companyId) {
+      if (companyId && companyId !== "INDIVIDUAL") {
         const compSnap = await db.collection("companies").doc(companyId).get();
         if (compSnap.exists) {
           adminEmailForLog = compSnap.data().createdBy || "system";
