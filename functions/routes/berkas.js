@@ -134,6 +134,119 @@ router.post("/upload", verifyToken, async (req, res) => {
 });
 
 // ---------------------------------------------------------
+// POST /upload - Upload File dengan Cek Kuota Storage
+// ---------------------------------------------------------
+router.post("/upload-noLogs", verifyToken, async (req, res) => {
+  try {
+    const user = req.user;
+    const category = req.query.category || "general";
+
+    // 1. Validasi Akses
+    if (!["admin", "staff"].includes(user.role)) {
+      return res.status(403).json({ message: "Hanya Admin & Staff yang boleh upload." });
+    }
+    if (!user.idCompany) {
+      return res.status(400).json({ message: "ID Company tidak valid." });
+    }
+
+    // 2. CEK KUOTA STORAGE (Pre-Upload Check)
+    const companyRef = db.collection("companies").doc(user.idCompany);
+    const companyDoc = await companyRef.get();
+    
+    if (!companyDoc.exists) return res.status(404).json({ message: "Perusahaan tidak ditemukan." });
+    
+    const companyData = companyDoc.data();
+    const maxStorage = companyData.maxStorage || 0; // Default 0 (Locked)
+    const usedStorage = companyData.usedStorage || 0;
+
+    // A. Jika Max Storage 0, berarti belum berlangganan/aktivasi
+    if (maxStorage === 0) {
+        return res.status(402).json({ 
+            message: "Penyimpanan Anda 0 GB. Silakan upgrade paket perusahaan untuk mulai mengunggah berkas.",
+            code: "NO_STORAGE_QUOTA"
+        });
+    }
+
+    // B. Jika sudah penuh sebelum upload
+    if (usedStorage >= maxStorage) {
+        return res.status(400).json({ 
+            message: "Penyimpanan penuh! Hapus berkas lama atau upgrade paket.",
+            code: "STORAGE_FULL"
+        });
+    }
+
+    // 3. Proses Upload ke Cloud Storage
+    const folderPath = `company_files/${user.idCompany}`;
+    let result;
+    
+    try {
+        result = await uploadFileBerkas(req, folderPath);
+    } catch (uploadError) {
+        return res.status(500).json({ message: "Gagal upload ke server.", error: uploadError.message });
+    }
+
+    // 4. CEK KUOTA LAGI (Post-Upload Check)
+    // Kita baru tau size asli file setelah selesai upload
+    const newFileSize = result.sizeBytes;
+    
+    if (usedStorage + newFileSize > maxStorage) {
+        // ROLLBACK: Hapus file yang barusan diupload karena melampaui batas
+        try {
+            await bucket.file(result.storagePath).delete();
+        } catch (delErr) {
+            console.error("Gagal rollback file:", delErr);
+        }
+
+        return res.status(400).json({ 
+            message: `File terlalu besar (${result.sizeDisplay}). Sisa kuota tidak mencukupi.`,
+            code: "QUOTA_EXCEEDED"
+        });
+    }
+
+    // 5. Simpan Metadata & Update Kuota Terpakai
+    const newFileDoc = {
+      fileName: result.originalName,
+      storagePath: result.storagePath,
+      downloadUrl: result.publicUrl,
+      mimeType: result.mimeType,
+      size: result.sizeDisplay,
+      sizeBytes: result.sizeBytes, // Simpan bytes untuk perhitungan
+      category: category,
+      uploadedBy: user.email,
+      uploaderName: user.nama || "User",
+      uploaderRole: user.role,
+      createdAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
+      updatedBy: null,
+    };
+
+    // Jalankan Transaction/Batch agar atomik (Simpan File + Update Used Storage)
+    const batch = db.batch();
+    
+    // A. Add File Doc
+    const newDocRef = companyRef.collection("files").doc();
+    batch.set(newDocRef, newFileDoc);
+
+    // B. Increment Used Storage
+    batch.update(companyRef, {
+        usedStorage: FieldValue.increment(newFileSize)
+    });
+
+    await batch.commit();
+
+    return res.status(201).json({
+      message: "Berkas berhasil diupload.",
+      data: { id: newDocRef.id, ...newFileDoc },
+    });
+
+  } catch (e) {
+    console.error("Upload Error:", e);
+    return res.status(500).json({ message: "Server Error", error: e.message });
+  }
+});
+
+
+// ---------------------------------------------------------
 // GET /list - List Files (Filter by Category)
 // ---------------------------------------------------------
 // URL: {{BaseUrl}}/api/files/list?category=ALL        <-- AMBIL SEMUA
