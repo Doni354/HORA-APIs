@@ -12,6 +12,16 @@ const router = express.Router();
 const crypto = require("crypto");
 
 /**
+ * Helper: Deteksi Auth Provider dari decoded Firebase token
+ */
+const getAuthProvider = (decodedToken) => {
+  const provider = decodedToken?.firebase?.sign_in_provider || "unknown";
+  if (provider === "google.com") return "google";
+  if (provider === "apple.com") return "apple";
+  return provider;
+};
+
+/**
  * HELPER: Pengecekan Kuota Karyawan (Admin + Staff)
  * Digunakan di: verify-employee & accept-invite
  */
@@ -676,7 +686,7 @@ router.post("/accept-invite", async (req, res) => {
     try {
       decodedToken = await admin.auth().verifyIdToken(idToken.toString().trim());
     } catch (error) {
-      return res.status(401).json({ message: "Sesi Google tidak valid." });
+      return res.status(401).json({ message: "Sesi login tidak valid." });
     }
 
     const email = decodedToken.email;
@@ -705,7 +715,7 @@ router.post("/accept-invite", async (req, res) => {
       username: username,
       alamatEmail: email, 
       photoURL: photoURL,
-      authProvider: "google",
+      authProvider: getAuthProvider(decodedToken),
       noTelp: noTelp,
       noWA: noWA || noTelp, 
       idCompany: inviteData.idCompany,
@@ -790,7 +800,7 @@ router.post("/apply", async (req, res) => {
       try {
         decodedToken = await admin.auth().verifyIdToken(idToken.toString().trim());
       } catch (error) {
-        return res.status(401).json({ message: "Sesi Google tidak valid." });
+        return res.status(401).json({ message: "Sesi login tidak valid." });
       }
   
       const email = decodedToken.email;
@@ -830,7 +840,7 @@ router.post("/apply", async (req, res) => {
         username: username,
         alamatEmail: email,
         photoURL: photoURL,
-        authProvider: "google",
+        authProvider: getAuthProvider(decodedToken),
         noTelp: noTelp,
         noWA: noWA || noTelp,
         

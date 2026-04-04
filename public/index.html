@@ -8,12 +8,19 @@
         body { font-family: monospace; padding: 20px; max-width: 800px; margin: 0 auto; background: #f4f4f4; }
         .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         textarea { width: 100%; height: 200px; margin-top: 10px; font-size: 12px; padding: 10px; border: 1px solid #ccc; }
-        button { padding: 10px 20px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 4px; font-size: 16px; }
-        button:hover { background: #0056b3; }
+        .btn-group { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+        button { padding: 10px 20px; cursor: pointer; border: none; border-radius: 4px; font-size: 16px; color: white; }
+        button:hover { opacity: 0.9; }
+        .btn-google { background: #4285F4; }
+        .btn-apple { background: #000000; }
+        .btn-logout { background: #dc3545; }
         #status { margin-top: 10px; font-weight: bold; color: #333; }
         .env-badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 12px; margin-bottom: 10px; font-weight: bold;}
         .emulator { background: #ffecb3; color: #664d03; border: 1px solid #ffecb3;}
         .production { background: #d1e7dd; color: #0f5132; border: 1px solid #badbcc;}
+        .provider-badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: bold; margin-left: 8px; }
+        .provider-google { background: #e8f0fe; color: #1a73e8; }
+        .provider-apple { background: #f5f5f5; color: #000; }
     </style>
 </head>
 <body>
@@ -21,13 +28,16 @@
     <div class="card">
         <h2>🛠 Firebase Token Generator</h2>
         <div id="envIndicator">Checking Environment...</div>
-        <p>Login dengan Google untuk mendapatkan <b>idToken</b> buat testing di Postman.</p>
+        <p>Login dengan <b>Google</b> atau <b>Apple</b> untuk mendapatkan <b>idToken</b> buat testing di Postman.</p>
         
-        <button id="btnLogin">Login with Google</button>
-        <button id="btnLogout" style="background:#dc3545; display:none;">Logout</button>
+        <div class="btn-group">
+            <button id="btnGoogle" class="btn-google">🔵 Login with Google</button>
+            <button id="btnApple" class="btn-apple">🍎 Login with Apple</button>
+            <button id="btnLogout" class="btn-logout" style="display:none;">Logout</button>
+        </div>
         
         <div id="resultArea" style="display:none; margin-top: 20px;">
-            <p><b>Your ID Token (Valid for 1 hour):</b></p>
+            <p><b>Your ID Token (Valid for 1 hour):</b> <span id="providerBadge"></span></p>
             <textarea id="tokenDisplay" readonly onclick="this.select()"></textarea>
             <p style="font-size: 12px; color: #666;">*Klik kotak di atas, Ctrl+C, lalu paste di Body Postman.</p>
         </div>
@@ -37,7 +47,7 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-        import { getAuth, GoogleAuthProvider, signInWithPopup, connectAuthEmulator, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getAuth, GoogleAuthProvider, OAuthProvider, signInWithPopup, connectAuthEmulator, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 
         // --- 1. PASTE CONFIG KAMU DISINI ---
         const firebaseConfig = {
@@ -53,28 +63,33 @@
         // Initialize Firebase
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
-        const provider = new GoogleAuthProvider();
+
+        // Providers
+        const googleProvider = new GoogleAuthProvider();
+        const appleProvider = new OAuthProvider('apple.com');
+        appleProvider.addScope('email');
+        appleProvider.addScope('name');
 
         // --- 2. PENGATURAN EMULATOR (PENTING!) ---
-        // Kode ini otomatis mendeteksi kalau kita buka di localhost
-        // Dia akan connect ke Auth Emulator (Port 9099)
         if (location.hostname === "localhost" || location.hostname === "127.0.0.1") {
-            // Uncomment baris di bawah ini kalau kamu mau testing LOCAL EMULATOR
             connectAuthEmulator(auth, "http://127.0.0.1:9099");
             
             document.getElementById("envIndicator").innerHTML = '<span class="env-badge emulator">MODE: EMULATOR (Port 9099)</span>';
             console.log("Menggunakan Auth Emulator!");
         } else {
-            document.getElementById("envIndicator").innerHTML = '<span class="env-badge production">MODE: PRODUCTION (Real Google)</span>';
+            document.getElementById("envIndicator").innerHTML = '<span class="env-badge production">MODE: PRODUCTION (Real Auth)</span>';
         }
 
-        const btnLogin = document.getElementById("btnLogin");
+        const btnGoogle = document.getElementById("btnGoogle");
+        const btnApple = document.getElementById("btnApple");
         const btnLogout = document.getElementById("btnLogout");
         const tokenDisplay = document.getElementById("tokenDisplay");
         const status = document.getElementById("status");
         const resultArea = document.getElementById("resultArea");
+        const providerBadge = document.getElementById("providerBadge");
 
-        btnLogin.addEventListener("click", async () => {
+        // --- LOGIN HANDLER (Reusable) ---
+        async function handleLogin(provider, providerName) {
             try {
                 status.innerText = "Pop-up dibuka...";
                 const result = await signInWithPopup(auth, provider);
@@ -86,15 +101,25 @@
                 tokenDisplay.value = token;
                 resultArea.style.display = "block";
                 status.innerText = `Login Sukses: ${user.email}`;
-                btnLogin.style.display = "none";
+
+                // Show provider badge
+                const badgeClass = providerName === "Google" ? "provider-google" : "provider-apple";
+                providerBadge.innerHTML = `<span class="provider-badge ${badgeClass}">via ${providerName}</span>`;
+                
+                btnGoogle.style.display = "none";
+                btnApple.style.display = "none";
                 btnLogout.style.display = "inline-block";
                 
-                console.log("Token:", token);
+                console.log(`[${providerName}] Token:`, token);
             } catch (error) {
                 console.error(error);
                 status.innerText = "Error: " + error.message;
             }
-        });
+        }
+
+        // --- EVENT LISTENERS ---
+        btnGoogle.addEventListener("click", () => handleLogin(googleProvider, "Google"));
+        btnApple.addEventListener("click", () => handleLogin(appleProvider, "Apple"));
 
         btnLogout.addEventListener("click", () => {
             signOut(auth).then(() => {

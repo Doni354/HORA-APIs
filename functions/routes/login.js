@@ -192,6 +192,18 @@ const checkUserStatus = (data) => {
 };
 
 /**
+ * Helper: Deteksi Auth Provider dari decoded Firebase token
+ * Firebase verifyIdToken() itu provider-agnostic, jadi kita cek
+ * field `firebase.sign_in_provider` untuk tahu user login pakai apa.
+ */
+const getAuthProvider = (decodedToken) => {
+  const provider = decodedToken?.firebase?.sign_in_provider || "unknown";
+  if (provider === "google.com") return "google";
+  if (provider === "apple.com") return "apple";
+  return provider;
+};
+
+/**
  * Helper: Sanitize email untuk Firestore map key
  * Firestore field path tidak boleh mengandung '.' karena dianggap nested field.
  * Kita ganti '.' → '_' untuk key di deviceBindings map.
@@ -339,7 +351,7 @@ router.post("/login-google", async (req, res) => {
 
     // --- A. Validasi Input ---
     if (!idToken)
-      return res.status(400).json({ message: "Google ID Token diperlukan." });
+      return res.status(400).json({ message: "ID Token diperlukan." });
     if (!deviceId)
       return res
         .status(400)
@@ -356,7 +368,7 @@ router.post("/login-google", async (req, res) => {
         .auth()
         .verifyIdToken(idToken.toString().trim());
     } catch (error) {
-      return res.status(401).json({ message: "Sesi Google tidak valid." });
+      return res.status(401).json({ message: "Sesi login tidak valid." });
     }
 
     const email = decodedToken.email;
@@ -675,7 +687,7 @@ router.post("/registrasi", async (req, res) => {
         createdAt: Timestamp.now(),
         status: "active",
         verified: false,
-        authProvider: "google",
+        authProvider: getAuthProvider(decodedToken),
       });
     });
 
@@ -729,7 +741,7 @@ router.post("/register-employee", async (req, res) => {
       console.error("Token verification failed:", error);
       return res
         .status(401)
-        .json({ message: "Sesi Google tidak valid atau kadaluarsa." });
+        .json({ message: "Sesi login tidak valid atau kadaluarsa." });
     }
 
     // Ambil data user dari hasil decode token
@@ -786,7 +798,7 @@ router.post("/register-employee", async (req, res) => {
       // Tapi 'verified' di sini mungkin maksudmu 'verified by company admin'.
       // Jadi biarkan false atau sesuaikan logika aplikasimu.
       verified: false, // Saran: True karena email google pasti asli. Tinggal approval admin company.
-      authProvider: "google", // Penanda login pakai google
+      authProvider: getAuthProvider(decodedToken), // Deteksi otomatis: google / apple
     };
 
     // Gunakan set({merge: true})
@@ -1045,7 +1057,7 @@ router.post("/login-google-admin", async (req, res) => {
 
     // --- A. Validasi Input ---
     if (!idToken) {
-      return res.status(400).json({ message: "Google ID Token diperlukan." });
+      return res.status(400).json({ message: "ID Token diperlukan." });
     }
 
     // --- B. Verifikasi Token Google ---
@@ -1058,7 +1070,7 @@ router.post("/login-google-admin", async (req, res) => {
       console.error("Firebase Auth Error:", error);
       return res
         .status(401)
-        .json({ message: "Sesi Google tidak valid atau kedaluwarsa." });
+        .json({ message: "Sesi login tidak valid atau kedaluwarsa." });
     }
 
     const email = decodedToken.email;
