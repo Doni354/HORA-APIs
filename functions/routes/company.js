@@ -7,6 +7,7 @@ const { db, bucket } = require("../config/firebase");
 const { verifyToken } = require("../middleware/token");
 const { logCompanyActivity } = require("../helper/logCompanyActivity");
 const EmailTemplates = require("../helper/emailHelper");
+const { checkPhoneUnique } = require("../helper/phoneValidator");
 const { auth } = require("firebase-admin");
 const router = express.Router();
 const crypto = require("crypto");
@@ -666,6 +667,15 @@ router.post("/accept-invite", async (req, res) => {
       return res.status(400).json({ message: "Data tidak lengkap." });
     }
 
+    // --- Validasi: No Telp tidak boleh duplikat ---
+    const phoneCheck = await checkPhoneUnique(noTelp);
+    if (phoneCheck.isDuplicate) {
+      return res.status(409).json({
+        message: "Nomor telepon sudah digunakan oleh akun lain.",
+        error: "PHONE_ALREADY_EXISTS",
+      });
+    }
+
     const inviteRef = db.collection("invitations").doc(inviteCode);
     const inviteDoc = await inviteRef.get();
     if (!inviteDoc.exists) return res.status(404).json({ message: "Kode undangan tidak valid." });
@@ -786,6 +796,15 @@ router.post("/apply", async (req, res) => {
       // A. Validasi
       if (!idToken || !idCompany || !noTelp) {
         return res.status(400).json({ message: "Data tidak lengkap." });
+      }
+
+      // --- Validasi: No Telp tidak boleh duplikat ---
+      const phoneCheck = await checkPhoneUnique(noTelp);
+      if (phoneCheck.isDuplicate) {
+        return res.status(409).json({
+          message: "Nomor telepon sudah digunakan oleh akun lain.",
+          error: "PHONE_ALREADY_EXISTS",
+        });
       }
   
       // B. Cek Perusahaan Valid

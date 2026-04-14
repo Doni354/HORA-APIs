@@ -9,6 +9,7 @@ const { Timestamp } = require("firebase-admin/firestore");
 const { db, bucket } = require("../config/firebase");
 const { verifyToken } = require("../middleware/token");
 const { logCompanyActivity } = require("../helper/logCompanyActivity");
+const { checkPhoneUnique } = require("../helper/phoneValidator");
 const router = express.Router();
 const EmailTemplates = require("../helper/emailHelper");
 
@@ -620,6 +621,15 @@ router.post("/registrasi", async (req, res) => {
       return res.status(400).json({ message: "Data tidak lengkap." });
     }
 
+    // --- Validasi: No Telp tidak boleh duplikat ---
+    const phoneCheck = await checkPhoneUnique(noTelp);
+    if (phoneCheck.isDuplicate) {
+      return res.status(409).json({
+        message: "Nomor telepon sudah digunakan oleh akun lain.",
+        error: "PHONE_ALREADY_EXISTS",
+      });
+    }
+
     const decodedToken = await admin
       .auth()
       .verifyIdToken(idToken.toString().trim());
@@ -729,6 +739,15 @@ router.post("/register-employee", async (req, res) => {
       return res.status(400).json({
         message:
           "Data tidak lengkap. Harap sertakan Google Token, ID Company, dan No Telepon.",
+      });
+    }
+
+    // --- Validasi: No Telp tidak boleh duplikat ---
+    const phoneCheck = await checkPhoneUnique(noTelp);
+    if (phoneCheck.isDuplicate) {
+      return res.status(409).json({
+        message: "Nomor telepon sudah digunakan oleh akun lain.",
+        error: "PHONE_ALREADY_EXISTS",
       });
     }
 

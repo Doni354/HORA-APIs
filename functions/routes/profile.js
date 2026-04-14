@@ -8,6 +8,7 @@ const { uploadFile } = require("../helper/uploadFile");
 const router = express.Router();
 const { Timestamp } = require("firebase-admin/firestore");
 const { logCompanyActivity } = require("../helper/logCompanyActivity");
+const { checkPhoneUnique } = require("../helper/phoneValidator");
 const EmailTemplates = require("../helper/emailHelper");
 // =========================================================
 // EMPLOYEE MANAGEMENT
@@ -359,6 +360,17 @@ router.put("/user-profile", verifyToken, async (req, res) => {
 
     if (!userDoc.exists) {
       return res.status(404).json({ message: "User tidak ditemukan." });
+    }
+
+    // --- Validasi: No Telp tidak boleh duplikat (hanya jika diubah) ---
+    if (noTelp) {
+      const phoneCheck = await checkPhoneUnique(noTelp, email);
+      if (phoneCheck.isDuplicate) {
+        return res.status(409).json({
+          message: "Nomor telepon sudah digunakan oleh akun lain.",
+          error: "PHONE_ALREADY_EXISTS",
+        });
+      }
     }
 
     // Siapkan data update (Partial Update)
