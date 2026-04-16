@@ -1250,4 +1250,90 @@ router.post("/register-faceid", verifyToken, async (req, res) => {
     });
   }
 });
+// ---------------------------------------------------------
+// DEMO LOGIN (For App Store Review)
+// ---------------------------------------------------------
+// Endpoint ini memberikan akses demo ke reviewer Apple
+// tanpa perlu Google/Apple Sign-In.
+//
+// Demo accounts harus di-setup terlebih dahulu di Firestore:
+// - users/demo-admin@vorce.id   (role: admin,    idCompany: CDEMO001)
+// - users/demo-employee@vorce.id (role: employee, idCompany: CDEMO001)
+// - companies/CDEMO001          (Vorce Demo Corp, dengan sample data)
+// ---------------------------------------------------------
+router.post("/demo-login", async (req, res) => {
+  try {
+    const { role } = req.body;
+
+    // Demo account mapping
+    const DEMO_ACCOUNTS = {
+      admin: "demo-admin@vorce.id",
+      staff: "demo-employee@vorce.id",
+    };
+
+    const demoEmail = DEMO_ACCOUNTS[role];
+    if (!demoEmail) {
+      return res.status(400).json({
+        message: "Role harus 'admin' atau 'employee'.",
+      });
+    }
+
+    // Ambil data demo user dari Firestore
+    const userRef = db.collection("users").doc(demoEmail);
+    const userDoc = await userRef.get();
+
+    if (!userDoc.exists) {
+      return res.status(404).json({
+        message: "Demo account belum di-setup di Firestore.",
+      });
+    }
+
+    const data = userDoc.data();
+
+    // Validasi bahwa akun demo memang aktif dan verified
+    if (data.status !== "active" || data.verified !== true) {
+      return res.status(500).json({
+        message: "Demo account belum dikonfigurasi dengan benar.",
+      });
+    }
+
+    // Generate JWT token untuk demo session
+    const tokenPayload = {
+      id: demoEmail,
+      role: data.role,
+      idCompany: data.idCompany,
+      status: data.status,
+      deviceId: "demo-device",
+      isDemo: true,
+    };
+
+    const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, {
+      expiresIn: "7d",
+    });
+
+    // Update lastLogin untuk tracking
+    await userRef.update({
+      lastLogin: Timestamp.now(),
+    });
+
+    console.log(`[Demo Login] ${role} login: ${demoEmail}`);
+
+    return res.status(200).json({
+      message: "Demo Login Berhasil",
+      token: token,
+      isDemo: true,
+      user: {
+        email: demoEmail,
+        role: data.role,
+        nama: data.username,
+        idCompany: data.idCompany,
+        companyName: data.companyName,
+      },
+    });
+  } catch (e) {
+    console.error("Demo Login Error:", e);
+    return res.status(500).json({ message: "Server Error" });
+  }
+});
+
 module.exports = router;
