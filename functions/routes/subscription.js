@@ -445,7 +445,422 @@ router.get("/status", verifyToken, async (req, res) => {
   }
 });
 
+// ==================================================================
+// 3. VERIFY APPLE SUBSCRIPTION (Endpoint dari Flutter iOS)
+// ==================================================================
+/**
+ * POST /api/subscription/verify-apple
+ *
+ * Endpoint ini dipanggil Flutter setelah user berhasil membeli subscription
+ * di iOS (via StoreKit 2).
+ *
+ * Body yang diharapkan:
+ * {
+ *   "transactionId": "transaction-id-dari-storekit",
+ *   "productId": "vorce_explorer"
+ * }
+ *
+ * PERBEDAAN DENGAN GOOGLE PLAY:
+ * - Google: purchaseToken → verify via Google Play API v3
+ * - Apple:  transactionId → verify via App Store Server API v2
+ * - Apple semua data dikembalikan dalam format JWS (signed JWT)
+ *
+ * companyId tetap diambil dari JWT kita (req.user.idCompany).
+ */
+router.post("/verify-apple", verifyToken, async (req, res) => {
+  try {
+    const { transactionId, productId } = req.body;
+    const user = req.user;
+
+    // ─── A. VALIDASI INPUT ───
+    if (!transactionId || !productId) {
+      return res.status(400).json({
+        message: "transactionId dan productId wajib diisi.",
+      });
+    }
+
+    // Cek apakah productId valid
+    const appleHelper = require("../helper/applestore");
+    const benefits = appleHelper.PRODUCT_BENEFITS[productId];
+    if (!benefits) {
+      return res.status(400).json({
+        message: `Product '${productId}' tidak dikenali.`,
+      });
+    }
+
+    // ─── B. CEK COMPANY ───
+    const companyId = user.idCompany;
+    if (!companyId) {
+      return res.status(403).json({
+        message: "Anda belum terdaftar di perusahaan manapun.",
+      });
+    }
+
+    if (user.role !== "admin") {
+      return res.status(403).json({
+        message: "Hanya Admin yang bisa membeli subscription.",
+      });
+    }
+
+    // ─── C. FRAUD CHECK: TRANSACTION ID REUSE ───
+    // Apple pakai transactionId sebagai unique identifier (bukan purchaseToken)
+    const tokenDoc = await db
+      .collection("subscription_tokens")
+      .doc(`apple_${transactionId}`)
+      .get();
+
+    if (tokenDoc.exists) {
+      return res.status(409).json({
+        message: "Transaksi ini sudah pernah diverifikasi.",
+      });
+    }
+
+    // ─── D. VERIFIKASI KE APPLE APP STORE SERVER API ───
+    let transactionData;
+    try {
+      transactionData = await appleHelper.verifyAppleTransaction(transactionId);
+    } catch (apiError) {
+      console.error("[Subscription] Apple API Error:", apiError.message);
+
+      if (apiError.code === 404 || apiError.code === 400) {
+        return res.status(400).json({
+          message: "Transaction ID tidak valid atau tidak ditemukan.",
+        });
+      }
+      throw apiError;
+    }
+
+    // ─── E. EXTRACT & VALIDATE DATA ───
+    // Dari decoded JWS, Apple mengembalikan:
+    // - productId: ID produk yang dibeli
+    // - expiresDate: kapan subscription expire (ms)
+    // - originalTransactionId: ID transaksi original
+    // - bundleId: bundle ID app
+    // - type: "Auto-Renewable Subscription"
+    const appleProductId = transactionData.productId;
+    const expiresDateMs = transactionData.expiresDate;
+    const originalTransactionId = transactionData.originalTransactionId || transactionId;
+    const bundleId = transactionData.bundleId;
+
+    // Validasi bundle ID
+    if (bundleId && bundleId !== appleHelper.APPLE_BUNDLE_ID) {
+      console.error(
+        `[Subscription] Bundle ID mismatch: expected ${appleHelper.APPLE_BUNDLE_ID}, got ${bundleId}`
+      );
+      return res.status(400).json({
+        message: "Bundle ID tidak sesuai.",
+      });
+    }
+
+    // Validasi productId cocok
+    if (appleProductId && appleProductId !== productId) {
+      console.warn(
+        `[Subscription] Product ID mismatch: client=${productId}, apple=${appleProductId}`
+      );
+    }
+
+    // Cek expiry
+    const expiryTime = expiresDateMs ? new Date(expiresDateMs) : null;
+    const isExpired = expiryTime && expiryTime < new Date();
+
+    if (isExpired) {
+      return res.status(400).json({
+        message: "Subscription sudah expired.",
+      });
+    }
+
+    // ─── F. SIMPAN KE FIRESTORE ───
+    const subscriptionId = `${productId}_apple_${Date.now()}`;
+
+    const subscriptionDoc = {
+      productId: productId,
+      transactionId: transactionId,
+      originalTransactionId: originalTransactionId,
+      status: "active",
+      platform: "apple",
+      startedAt: Timestamp.now(),
+      expiresAt: expiryTime ? Timestamp.fromDate(expiryTime) : null,
+      lastRenewedAt: Timestamp.now(),
+      cancelledAt: null,
+      autoRenewing: true, // Default true untuk auto-renewable subscription
+      addedStorage: benefits.addedStorage,
+      addedKaryawan: benefits.addedKaryawan,
+      purchasedBy: user.email,
+      createdAt: Timestamp.now(),
+    };
+
+    const tokenRegistryDoc = {
+      companyId: companyId,
+      subscriptionId: subscriptionId,
+      productId: productId,
+      platform: "apple",
+      originalTransactionId: originalTransactionId,
+      createdAt: Timestamp.now(),
+    };
+
+    // Batch write
+    const batch = db.batch();
+
+    const subRef = db
+      .collection("companies")
+      .doc(companyId)
+      .collection("subscriptions")
+      .doc(subscriptionId);
+    batch.set(subRef, subscriptionDoc);
+
+    // Token registry: pakai prefix "apple_" untuk membedakan dari Google
+    const tokenRef = db
+      .collection("subscription_tokens")
+      .doc(`apple_${transactionId}`);
+    batch.set(tokenRef, tokenRegistryDoc);
+
+    await batch.commit();
+
+    // ─── G. RECALCULATE LIMITS ───
+    await recalculateLimits(companyId);
+
+    console.log(
+      `[Subscription] ✅ Apple verified & activated: ${productId} for ${companyId} by ${user.email}`
+    );
+
+    return res.status(200).json({
+      message: "Subscription Apple berhasil diaktifkan!",
+      data: {
+        subscriptionId: subscriptionId,
+        productId: productId,
+        plan: benefits.name,
+        platform: "apple",
+        status: "active",
+        expiresAt: expiryTime ? expiryTime.toISOString() : null,
+        addedStorage: benefits.addedStorage,
+        addedKaryawan: benefits.addedKaryawan,
+      },
+    });
+  } catch (e) {
+    console.error("[Subscription] Apple Verify Error:", e);
+    return res.status(500).json({ message: "Server Error" });
+  }
+});
+
+// ==================================================================
+// 4. APPLE SERVER NOTIFICATION v2 WEBHOOK
+// ==================================================================
+/**
+ * POST /api/subscription/apple-webhook
+ *
+ * Endpoint ini dipanggil oleh Apple Server Notifications v2
+ * setiap kali ada perubahan status subscription (renew, cancel, expire, dll).
+ *
+ * Mirip dengan Google Play RTDN (di rtdn.js), tapi:
+ * - Google: Pub/Sub trigger
+ * - Apple: HTTP webhook (POST ke URL kita)
+ *
+ * Apple mengirim payload dalam format JWS (JSON Web Signature)
+ * yang harus di-decode dan di-verify.
+ *
+ * SETUP DI APP STORE CONNECT:
+ * App Store Connect → App → General → App Information
+ * → Server Notifications URL (Production / Sandbox)
+ * → Masukkan: https://api-y4ntpb3uvq-et.a.run.app/api/subscription/apple-webhook
+ *
+ * Body dari Apple:
+ * {
+ *   "signedPayload": "eyJ..." (JWS string)
+ * }
+ *
+ * Decoded payload berisi:
+ * {
+ *   "notificationType": "DID_RENEW" | "EXPIRED" | "REFUND" | etc,
+ *   "subtype": "AUTO_RENEW_DISABLED" | etc,
+ *   "data": {
+ *     "signedTransactionInfo": "eyJ..." (JWS lagi),
+ *     "signedRenewalInfo": "eyJ..." (JWS lagi)
+ *   }
+ * }
+ */
+router.post("/apple-webhook", async (req, res) => {
+  try {
+    const { signedPayload } = req.body;
+
+    if (!signedPayload) {
+      console.warn("[Apple Webhook] Empty payload received");
+      return res.status(400).json({ message: "Missing signedPayload" });
+    }
+
+    const appleHelper = require("../helper/applestore");
+
+    // ─── A. DECODE NOTIFICATION PAYLOAD ───
+    let notification;
+    try {
+      notification = await appleHelper.decodeAppleJWS(signedPayload);
+    } catch (decodeError) {
+      console.error("[Apple Webhook] Failed to decode payload:", decodeError.message);
+      return res.status(400).json({ message: "Invalid payload" });
+    }
+
+    const { notificationType, subtype, data } = notification;
+
+    console.log(
+      `[Apple Webhook] Received: type=${notificationType}, subtype=${subtype || "none"}`
+    );
+
+    // ─── B. HANDLE TEST NOTIFICATION ───
+    if (notificationType === "TEST") {
+      console.log("[Apple Webhook] Test notification received — OK");
+      return res.status(200).json({ message: "Test received" });
+    }
+
+    // ─── C. DECODE TRANSACTION INFO ───
+    if (!data || !data.signedTransactionInfo) {
+      console.warn("[Apple Webhook] No transaction info in notification");
+      return res.status(200).json({ message: "No action needed" });
+    }
+
+    let transactionInfo;
+    try {
+      transactionInfo = await appleHelper.decodeAppleJWS(
+        data.signedTransactionInfo
+      );
+    } catch (txDecodeError) {
+      console.error(
+        "[Apple Webhook] Failed to decode transaction info:",
+        txDecodeError.message
+      );
+      return res.status(200).json({ message: "Decode failed, acknowledged" });
+    }
+
+    const { transactionId, originalTransactionId, productId, expiresDate } =
+      transactionInfo;
+
+    console.log(
+      `[Apple Webhook] Transaction: id=${transactionId}, product=${productId}, ` +
+        `originalTx=${originalTransactionId}`
+    );
+
+    // ─── D. LOOKUP SUBSCRIPTION DI DATABASE ───
+    // Cari di subscription_tokens berdasarkan originalTransactionId
+    const tokensQuery = await db
+      .collection("subscription_tokens")
+      .where("originalTransactionId", "==", originalTransactionId)
+      .where("platform", "==", "apple")
+      .limit(1)
+      .get();
+
+    if (tokensQuery.empty) {
+      // Token belum pernah diverifikasi oleh /verify-apple endpoint
+      console.warn(
+        "[Apple Webhook] Transaction not found in registry:",
+        originalTransactionId
+      );
+      // Return 200 agar Apple tidak retry terus
+      return res
+        .status(200)
+        .json({ message: "Transaction not tracked, acknowledged" });
+    }
+
+    const tokenData = tokensQuery.docs[0].data();
+    const { companyId, subscriptionId: subDocId } = tokenData;
+
+    // ─── E. UPDATE SUBSCRIPTION STATUS ───
+    const action = appleHelper.getNotificationAction(notificationType);
+    const expiryTime = expiresDate ? new Date(expiresDate) : null;
+
+    const updateData = {
+      lastAppleNotifAt: Timestamp.now(),
+      lastAppleNotifType: notificationType,
+      lastAppleNotifSubtype: subtype || null,
+    };
+
+    switch (action) {
+      case "activate":
+      case "renew":
+        updateData.status = "active";
+        updateData.lastRenewedAt = Timestamp.now();
+        if (expiryTime) {
+          updateData.expiresAt = Timestamp.fromDate(expiryTime);
+        }
+        break;
+
+      case "expire":
+        updateData.status = "expired";
+        updateData.expiredAt = Timestamp.now();
+        break;
+
+      case "revoke":
+        updateData.status = "expired";
+        updateData.revokedAt = Timestamp.now();
+        break;
+
+      case "billing_issue":
+        // Bisa grace_period atau on_hold tergantung subtype
+        if (subtype === "GRACE_PERIOD") {
+          updateData.status = "grace_period";
+        } else {
+          updateData.status = "on_hold";
+        }
+        break;
+
+      case "status_change":
+        // Auto-renew status changed
+        if (subtype === "AUTO_RENEW_DISABLED") {
+          updateData.autoRenewing = false;
+          updateData.status = "cancelled"; // Will still be active until expiry
+        } else if (subtype === "AUTO_RENEW_ENABLED") {
+          updateData.autoRenewing = true;
+          updateData.status = "active";
+        }
+        break;
+
+      case "extend":
+        updateData.status = "active";
+        if (expiryTime) {
+          updateData.expiresAt = Timestamp.fromDate(expiryTime);
+        }
+        break;
+
+      default:
+        console.log(
+          `[Apple Webhook] Unhandled action: ${action} for type: ${notificationType}`
+        );
+        break;
+    }
+
+    // Update subscription document
+    const subRef = db
+      .collection("companies")
+      .doc(companyId)
+      .collection("subscriptions")
+      .doc(subDocId);
+
+    const subDoc = await subRef.get();
+    if (!subDoc.exists) {
+      console.warn(
+        `[Apple Webhook] Subscription doc ${subDocId} not found in company ${companyId}`
+      );
+      return res.status(200).json({ message: "Subscription doc not found" });
+    }
+
+    await subRef.update(updateData);
+
+    // ─── F. RECALCULATE LIMITS ───
+    await recalculateLimits(companyId);
+
+    console.log(
+      `[Apple Webhook] ✅ Updated ${subDocId} → action: ${action}, type: ${notificationType}`
+    );
+
+    // Apple expects 200 response to stop retrying
+    return res.status(200).json({ message: "OK" });
+  } catch (e) {
+    console.error("[Apple Webhook] Error:", e);
+    // Still return 200 to prevent Apple from retrying indefinitely
+    // Log the error for debugging
+    return res.status(200).json({ message: "Error processed" });
+  }
+});
+
 // ──────────────────────────────────────────────
 // EXPORT
 // ──────────────────────────────────────────────
 module.exports = router;
+

@@ -27,6 +27,7 @@
     "formidable": "^3.5.1",
     "googleapis": "^171.4.0",
     "imap-simple": "^5.1.0",
+    "jose": "^6.2.2",
     "mailparser": "^3.9.1",
     "nodemailer": "^7.0.12"
   },
