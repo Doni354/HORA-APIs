@@ -33,22 +33,34 @@ async function checkCompanyQuota(idCompany) {
   const companyData = companyDoc.data();
   // Default limit 10 jika field maxKaryawan belum ada di DB
   const maxQuota = companyData.maxKaryawan || 10; 
+  const ownerEmail = companyData.createdBy; // Owner tidak dihitung sebagai karyawan
 
   const employeesSnapshot = await db.collection("users")
     .where("idCompany", "==", idCompany)
     .where("role", "in", ["admin", "staff"])
     .get();
 
-  const currentCount = employeesSnapshot.size;
+  // Hitung karyawan, exclude owner
+  let currentCount = 0;
+  employeesSnapshot.forEach((doc) => {
+    if (doc.id !== ownerEmail) {
+      currentCount++;
+    }
+  });
+
+  // Sync totalEmployees di company doc (agar selalu up-to-date)
+  await db.collection("companies").doc(idCompany).update({
+    totalEmployees: currentCount,
+  });
 
   if (currentCount >= maxQuota) {
     return { 
       allowed: false, 
-      message: `Kuota karyawan penuh. Batas maksimal perusahaan Anda adalah ${maxQuota} orang. Silakan hubungi pusat untuk upgrade.` 
+      message: `Kuota karyawan penuh (${currentCount}/${maxQuota}). Silakan hubungi pusat untuk upgrade.` 
     };
   }
 
-  return { allowed: true };
+  return { allowed: true, currentCount };
 }
 
 // ---------------------------------------------------------
@@ -95,6 +107,11 @@ router.post("/verify-employee", verifyToken, async (req, res) => {
         status: "active",
         approvedAt: Timestamp.now(),
         approvedBy: adminData.email,
+      });
+
+      // B. Sync totalEmployees (increment)
+      await db.collection("companies").doc(adminData.idCompany).update({
+        totalEmployees: FieldValue.increment(1),
       });
 
       // B. Log Aktivitas
@@ -187,6 +204,11 @@ router.post("/fire-employee", verifyToken, async (req, res) => {
       firedBy: actor.email,
       firedReason: finalReason,
       idCompany: null, // PENTING: Lepas ID Company biar kuota nambah
+    });
+
+    // Sync totalEmployees (decrement)
+    await db.collection("companies").doc(actor.idCompany).update({
+      totalEmployees: FieldValue.increment(-1),
     });
 
     await logCompanyActivity(actor.idCompany, {
@@ -739,6 +761,11 @@ router.post("/accept-invite", async (req, res) => {
 
     await userRef.set(newUser);
     await inviteRef.delete();
+
+    // Sync totalEmployees (increment)
+    await db.collection("companies").doc(inviteData.idCompany).update({
+      totalEmployees: FieldValue.increment(1),
+    });
 
     await logCompanyActivity(inviteData.idCompany, {
         actorEmail: email,

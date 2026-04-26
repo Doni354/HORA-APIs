@@ -621,20 +621,26 @@ router.post("/registrasi", async (req, res) => {
       return res.status(400).json({ message: "Data tidak lengkap." });
     }
 
+    // --- Verifikasi Token Google ---
+    const decodedToken = await admin
+      .auth()
+      .verifyIdToken(idToken.toString().trim());
+    const email = decodedToken.email;
+    const uid = decodedToken.uid;
+
+    // --- Pre-check: Cek apakah user sudah ada di Firestore ---
+    const preCheckDoc = await db.collection("users").doc(email).get();
+
     // --- Validasi: No Telp tidak boleh duplikat ---
-    const phoneCheck = await checkPhoneUnique(noTelp);
+    // Jika user sudah ada, exclude email sendiri agar noTelp sendiri tidak dianggap duplikat
+    const excludeEmail = preCheckDoc.exists ? email : null;
+    const phoneCheck = await checkPhoneUnique(noTelp, excludeEmail);
     if (phoneCheck.isDuplicate) {
       return res.status(409).json({
         message: "Nomor telepon sudah digunakan oleh akun lain.",
         error: "PHONE_ALREADY_EXISTS",
       });
     }
-
-    const decodedToken = await admin
-      .auth()
-      .verifyIdToken(idToken.toString().trim());
-    const email = decodedToken.email;
-    const uid = decodedToken.uid;
 
     // --- LOGIKA GENERATE ID DENGAN AUTO-SCALE ---
     let idCompany = "";
@@ -660,7 +666,15 @@ router.post("/registrasi", async (req, res) => {
       const userRef = db.collection("users").doc(email);
       const userDoc = await transaction.get(userRef);
 
-      if (userDoc.exists) throw new Error("USER_EXISTS");
+      // --- FIX: Cek idCompany sebelum tolak ---
+      if (userDoc.exists) {
+        const existingData = userDoc.data();
+        // Jika sudah punya company → tolak (409)
+        if (existingData.idCompany) {
+          throw new Error("USER_EXISTS_WITH_COMPANY");
+        }
+        // idCompany null/kosong → boleh lanjut, UPDATE user doc
+      }
 
       const companyRef = db.collection("companies").doc(idCompany);
 
@@ -676,6 +690,7 @@ router.post("/registrasi", async (req, res) => {
         maxKaryawan: 3,          // Default: 3 Orang (base limit)
         maxStorage: 104857600,   // Default: 100 MB in bytes (base limit)
         usedStorage: 0,          // Terpakai: 0 Bytes
+        totalEmployees: 0,       // Sync: 0 karyawan (owner tidak dihitung)
         // --- DEVICE LOCK (Default OFF) ---
         deviceLockEnabled: false,
         deviceBindings: {},
@@ -684,7 +699,7 @@ router.post("/registrasi", async (req, res) => {
         ownerUid: uid,
       });
 
-      transaction.set(userRef, {
+      const newUserData = {
         uid,
         username: decodedToken.name || email.split("@")[0],
         alamatEmail: email,
@@ -698,7 +713,15 @@ router.post("/registrasi", async (req, res) => {
         status: "active",
         verified: false,
         authProvider: getAuthProvider(decodedToken),
-      });
+      };
+
+      if (userDoc.exists) {
+        // User sudah ada tapi idCompany null → update
+        transaction.update(userRef, newUserData);
+      } else {
+        // User baru → set doc baru
+        transaction.set(userRef, newUserData);
+      }
     });
 
     await logCompanyActivity(idCompany, {
@@ -718,10 +741,14 @@ router.post("/registrasi", async (req, res) => {
       },
     });
   } catch (e) {
-    return res.status(500).json({
-      message:
-        e.message === "USER_EXISTS" ? "Email sudah terdaftar." : "Server Error",
-    });
+    if (e.message === "USER_EXISTS_WITH_COMPANY") {
+      return res.status(409).json({
+        message: "Email sudah terdaftar dan terhubung dengan perusahaan lain.",
+        error: "USER_EXISTS_WITH_COMPANY",
+      });
+    }
+    console.error("Registrasi Error:", e);
+    return res.status(500).json({ message: "Server Error" });
   }
 });
 

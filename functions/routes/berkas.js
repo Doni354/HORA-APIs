@@ -54,6 +54,16 @@ router.post("/upload", verifyToken, async (req, res) => {
         });
     }
 
+    // C. Cek kuota karyawan — jika melebihi maxKaryawan, blokir upload
+    const totalEmployees = companyData.totalEmployees || 0;
+    const maxKaryawan = companyData.maxKaryawan || 3;
+    if (totalEmployees > maxKaryawan) {
+        return res.status(403).json({
+            message: `Jumlah karyawan melebihi batas (${totalEmployees}/${maxKaryawan}). Kurangi jumlah karyawan atau upgrade paket untuk mengakses fitur upload.`,
+            code: "EMPLOYEE_LIMIT_EXCEEDED"
+        });
+    }
+
     // 3. Proses Upload ke Cloud Storage
     const folderPath = `company_files/${user.idCompany}`;
     let result;
@@ -172,6 +182,16 @@ router.post("/upload-noLogs", verifyToken, async (req, res) => {
         return res.status(400).json({ 
             message: "Penyimpanan penuh! Hapus berkas lama atau upgrade paket.",
             code: "STORAGE_FULL"
+        });
+    }
+
+    // C. Cek kuota karyawan — jika melebihi maxKaryawan, blokir upload
+    const totalEmployees = companyData.totalEmployees || 0;
+    const maxKaryawan = companyData.maxKaryawan || 3;
+    if (totalEmployees > maxKaryawan) {
+        return res.status(403).json({
+            message: `Jumlah karyawan melebihi batas (${totalEmployees}/${maxKaryawan}). Kurangi jumlah karyawan atau upgrade paket untuk mengakses fitur upload.`,
+            code: "EMPLOYEE_LIMIT_EXCEEDED"
         });
     }
 
