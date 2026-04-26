@@ -41,20 +41,132 @@ const router = express.Router();
 //   bisa dipindah ke collection `subscription_products` di Firestore.
 //
 // PENTING: Tambahkan entry baru di sini setiap kali buat subscription
-// baru di Google Play Console.
+// baru di Google Play Console / App Store Connect.
+//
+// TYPE:
+//   "tier"  = Plan utama (exclusive, 1 aktif). MENGGANTIKAN free tier.
+//   "addon" = Storage tambahan (stackable, bisa banyak bareng).
+//
+// GOOGLE PLAY: 1 productId + basePlanId (monthly/yearly) → resolve via resolveBenefits()
+// APPLE: productId terpisah per period (e.g. vorce_basic_month, vorce_basic_year)
+//
+// ──────────────────────────────────────────────
+// A. GOOGLE PLAY PRODUCT IDS
+//    basePlanId ("monthly"/"yearly") dari lineItems[0].offerDetails.basePlanId
+// ──────────────────────────────────────────────
 const PRODUCT_BENEFITS = {
-  vorce_explorer: {
-    name: "Explorer Plan",
-    addedStorage: 1073741824, // 1 GB in bytes
-    addedKaryawan: 10,
+  // ── TIER PLANS (Google Play) ──
+  vorce_basic: {
+    name: "Basic Plan", type: "tier",
+    monthly: { addedStorage: 1073741824, addedKaryawan: 10 },       // 1 GB
+    yearly:  { addedStorage: 12884901888, addedKaryawan: 10 },      // 12 GB
   },
-  // Contoh plan lain (uncomment kalau sudah dibuat di Play Console):
-  // vorce_professional: {
-  //   name: "Professional Plan",
-  //   addedStorage: 5368709120,  // 5 GB
-  //   addedKaryawan: 50,
-  // },
+  vorce_team: {
+    name: "Team Plan", type: "tier",
+    monthly: { addedStorage: 3221225472, addedKaryawan: 30 },       // 3 GB
+    yearly:  { addedStorage: 38654705664, addedKaryawan: 30 },      // 36 GB
+  },
+  vorce_business: {
+    name: "Business Plan", type: "tier",
+    monthly: { addedStorage: 10737418240, addedKaryawan: 100 },     // 10 GB
+    yearly:  { addedStorage: 128849018880, addedKaryawan: 100 },    // 120 GB
+  },
+  vorce_enterprise: {
+    name: "Enterprise Plan", type: "tier",
+    monthly: { addedStorage: 32212254720, addedKaryawan: 300 },     // 30 GB
+    yearly:  { addedStorage: 386547056640, addedKaryawan: 300 },    // 360 GB
+  },
+  // ── STORAGE ADDONS (Google Play) ──
+  vorce_storage_1: {
+    name: "Storage Addon 3GB", type: "addon",
+    monthly: { addedStorage: 3221225472, addedKaryawan: 0 },        // 3 GB
+    yearly:  { addedStorage: 38654705664, addedKaryawan: 0 },       // 36 GB
+  },
+  vorce_storage_2: {
+    name: "Storage Addon 10GB", type: "addon",
+    monthly: { addedStorage: 10737418240, addedKaryawan: 0 },       // 10 GB
+    yearly:  { addedStorage: 128849018880, addedKaryawan: 0 },      // 120 GB
+  },
+  vorce_storage_3: {
+    name: "Storage Addon 30GB", type: "addon",
+    monthly: { addedStorage: 32212254720, addedKaryawan: 0 },       // 30 GB
+    yearly:  { addedStorage: 386547056640, addedKaryawan: 0 },      // 360 GB
+  },
+  vorce_storage_4: {
+    name: "Storage Addon 60GB", type: "addon",
+    monthly: { addedStorage: 64424509440, addedKaryawan: 0 },       // 60 GB
+    yearly:  { addedStorage: 773094113280, addedKaryawan: 0 },      // 720 GB
+  },
+
+  // ──────────────────────────────────────────────
+  // B. APPLE PRODUCT IDS
+  //    Apple pakai productId terpisah per period (bukan basePlanId)
+  //    Setiap entry hanya punya 1 period key
+  // ──────────────────────────────────────────────
+
+  // ── TIER PLANS (Apple) ──
+  vorce_basic_month:      { name: "Basic Plan", type: "tier",
+    monthly: { addedStorage: 1073741824, addedKaryawan: 10 } },       // 1 GB
+  vorce_basic_year:       { name: "Basic Plan", type: "tier",
+    yearly:  { addedStorage: 12884901888, addedKaryawan: 10 } },      // 12 GB
+  vorce_team_month:       { name: "Team Plan", type: "tier",
+    monthly: { addedStorage: 3221225472, addedKaryawan: 30 } },       // 3 GB
+  vorce_team_year:        { name: "Team Plan", type: "tier",
+    yearly:  { addedStorage: 38654705664, addedKaryawan: 30 } },      // 36 GB
+  vorce_business_month:   { name: "Business Plan", type: "tier",
+    monthly: { addedStorage: 10737418240, addedKaryawan: 100 } },     // 10 GB
+  vorce_business_year:    { name: "Business Plan", type: "tier",
+    yearly:  { addedStorage: 128849018880, addedKaryawan: 100 } },    // 120 GB
+  vorce_enterprise_month: { name: "Enterprise Plan", type: "tier",
+    monthly: { addedStorage: 32212254720, addedKaryawan: 300 } },     // 30 GB
+  vorce_enterprise_year:  { name: "Enterprise Plan", type: "tier",
+    yearly:  { addedStorage: 386547056640, addedKaryawan: 300 } },    // 360 GB
+
+  // ── STORAGE ADDONS (Apple) ──
+  vorce_storage_1_month:  { name: "Storage Addon 3GB", type: "addon",
+    monthly: { addedStorage: 3221225472, addedKaryawan: 0 } },        // 3 GB
+  vorce_storage_1_year:   { name: "Storage Addon 3GB", type: "addon",
+    yearly:  { addedStorage: 38654705664, addedKaryawan: 0 } },       // 36 GB
+  vorce_storage_2_month:  { name: "Storage Addon 10GB", type: "addon",
+    monthly: { addedStorage: 10737418240, addedKaryawan: 0 } },       // 10 GB
+  vorce_storage_2_year:   { name: "Storage Addon 10GB", type: "addon",
+    yearly:  { addedStorage: 128849018880, addedKaryawan: 0 } },      // 120 GB
+  vorce_storage_3_month:  { name: "Storage Addon 30GB", type: "addon",
+    monthly: { addedStorage: 32212254720, addedKaryawan: 0 } },       // 30 GB
+  vorce_storage_3_year:   { name: "Storage Addon 30GB", type: "addon",
+    yearly:  { addedStorage: 386547056640, addedKaryawan: 0 } },      // 360 GB
+  vorce_storage_4_month:  { name: "Storage Addon 60GB", type: "addon",
+    monthly: { addedStorage: 64424509440, addedKaryawan: 0 } },       // 60 GB
+  vorce_storage_4_year:   { name: "Storage Addon 60GB", type: "addon",
+    yearly:  { addedStorage: 773094113280, addedKaryawan: 0 } },      // 720 GB
 };
+
+/**
+ * Resolve benefit dari productId + basePlanId.
+ * Tier plans punya monthly/yearly, addons hanya monthly.
+ *
+ * @param {string} productId - e.g. "vorce_basic"
+ * @param {string} basePlanId - e.g. "monthly" atau "yearly"
+ * @returns {{ name, type, addedStorage, addedKaryawan, billingPeriod }} atau null
+ */
+function resolveBenefits(productId, basePlanId) {
+  const product = PRODUCT_BENEFITS[productId];
+  if (!product) return null;
+
+  // Determine billing period
+  const period = (basePlanId || "").toLowerCase().includes("year") ? "yearly" : "monthly";
+  const benefits = product[period] || product.monthly; // fallback ke monthly
+
+  if (!benefits) return null;
+
+  return {
+    name: product.name,
+    type: product.type,
+    addedStorage: benefits.addedStorage,
+    addedKaryawan: benefits.addedKaryawan,
+    billingPeriod: period,
+  };
+}
 
 // ──────────────────────────────────────────────
 // HELPER: Map Google Play subscription state
@@ -101,22 +213,20 @@ function isActiveState(status) {
 /**
  * Hitung ulang maxStorage dan maxKaryawan berdasarkan semua subscription aktif.
  *
- * Formula:
- *   maxStorage  = BASE (100MB) + Σ(addedStorage dari subscription aktif)
- *   maxKaryawan = BASE (3)     + Σ(addedKaryawan dari subscription aktif)
- *
- * Kenapa pakai konstanta BASE dan bukan field di database?
- * → Karena base limit itu fixed (100MB / 3 karyawan) untuk semua company.
- *   Menyimpan di database hanya menambah kompleksitas tanpa manfaat.
- *   Kalau di masa depan perlu customisasi per-company, baru tambahkan field.
+ * FORMULA (REVISED):
+ *   Jika ada tier plan aktif → tier plan MENGGANTIKAN free tier:
+ *     maxStorage  = tierPlan.addedStorage + Σ(addon.addedStorage)
+ *     maxKaryawan = tierPlan.addedKaryawan
+ *   Jika TIDAK ada tier plan (free):
+ *     maxStorage  = BASE (100MB) + Σ(addon.addedStorage)
+ *     maxKaryawan = BASE (3)
  *
  * Fungsi ini IDEMPOTENT — bisa dipanggil berulang kali tanpa efek samping.
- * Ini penting karena RTDN bisa mengirim notifikasi duplikat.
  *
  * @param {string} companyId - ID company yang subscription-nya berubah
  */
 async function recalculateLimits(companyId) {
-  // 1. Ambil semua subscription yang STATUS-nya = aktif atau grace_period
+  // 1. Ambil semua subscription aktif
   const activeSubs = await db
     .collection("companies")
     .doc(companyId)
@@ -124,30 +234,48 @@ async function recalculateLimits(companyId) {
     .where("status", "in", ["active", "grace_period"])
     .get();
 
-  // 2. Jumlahkan semua addon dari subscription aktif
-  let totalAddedStorage = 0;
-  let totalAddedKaryawan = 0;
+  // 2. Pisahkan tier plan vs addons
+  let tierStorage = 0;
+  let tierKaryawan = 0;
+  let hasTierPlan = false;
+  let addonStorage = 0;
 
   activeSubs.forEach((doc) => {
     const data = doc.data();
-    totalAddedStorage += data.addedStorage || 0;
-    totalAddedKaryawan += data.addedKaryawan || 0;
+    if (data.productType === "tier") {
+      // Tier plan: ambil yang tertinggi jika ada multiple (seharusnya cuma 1)
+      if (!hasTierPlan || data.addedStorage > tierStorage) {
+        tierStorage = data.addedStorage || 0;
+        tierKaryawan = data.addedKaryawan || 0;
+      }
+      hasTierPlan = true;
+    } else {
+      // Addon: stack semua
+      addonStorage += data.addedStorage || 0;
+    }
   });
 
-  // 3. Update company document dengan total limit baru
-  //    BASE + semua addon dari subscription aktif
+  // 3. Hitung final limits
+  const finalStorage = hasTierPlan
+    ? tierStorage + addonStorage              // Tier REPLACES free tier
+    : BASE_MAX_STORAGE + addonStorage;        // Free tier + addons
+  const finalKaryawan = hasTierPlan
+    ? tierKaryawan                            // Tier's max karyawan
+    : BASE_MAX_KARYAWAN;                      // Free tier default
+
+  // 4. Update company document
   await db
     .collection("companies")
     .doc(companyId)
     .update({
-      maxStorage: BASE_MAX_STORAGE + totalAddedStorage,
-      maxKaryawan: BASE_MAX_KARYAWAN + totalAddedKaryawan,
+      maxStorage: finalStorage,
+      maxKaryawan: finalKaryawan,
     });
 
   console.log(
     `[Subscription] Recalculated limits for ${companyId}: ` +
-      `maxStorage=${BASE_MAX_STORAGE + totalAddedStorage}, ` +
-      `maxKaryawan=${BASE_MAX_KARYAWAN + totalAddedKaryawan}`
+      `maxStorage=${finalStorage} (tier=${hasTierPlan}), ` +
+      `maxKaryawan=${finalKaryawan}, addonStorage=${addonStorage}`
   );
 }
 
@@ -162,7 +290,7 @@ async function recalculateLimits(companyId) {
  * Body yang diharapkan:
  * {
  *   "purchaseToken": "token-dari-google-play",
- *   "productId": "vorce_explorer"
+ *   "productId": "vorce_basic"
  * }
  *
  * companyId diambil dari JWT token (req.user.idCompany),
@@ -191,8 +319,8 @@ router.post("/verify", verifyToken, async (req, res) => {
     }
 
     // Cek apakah productId valid (ada di config kita)
-    const benefits = PRODUCT_BENEFITS[productId];
-    if (!benefits) {
+    const productConfig = PRODUCT_BENEFITS[productId];
+    if (!productConfig) {
       return res.status(400).json({
         message: `Product '${productId}' tidak dikenali.`,
       });
@@ -268,6 +396,17 @@ router.post("/verify", verifyToken, async (req, res) => {
       : null;
     const autoRenewing = lineItem.autoRenewingPlan ? true : false;
 
+    // Detect basePlanId untuk menentukan monthly/yearly
+    const basePlanId = lineItem.offerDetails?.basePlanId || "monthly";
+
+    // Resolve benefits berdasarkan productId + basePlanId
+    const benefits = resolveBenefits(productId, basePlanId);
+    if (!benefits) {
+      return res.status(400).json({
+        message: `Tidak dapat resolve benefit untuk ${productId}/${basePlanId}.`,
+      });
+    }
+
     // orderId unik per transaksi (contoh: GPA.1234-5678-9012-34567)
     const orderId = subscriptionData.latestOrderId || null;
 
@@ -280,7 +419,6 @@ router.post("/verify", verifyToken, async (req, res) => {
     const ackState = subscriptionData.acknowledgementState;
     if (ackState !== "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED") {
       try {
-        // productId dari lineItem (contoh: "vorce_explorer")
         const actualProductId = lineItem.productId || productId;
         await acknowledgeSubscription(purchaseToken, actualProductId);
         console.log(`[Subscription] Acknowledged: ${purchaseToken.substring(0, 20)}...`);
@@ -301,6 +439,9 @@ router.post("/verify", verifyToken, async (req, res) => {
 
     const subscriptionDoc = {
       productId: productId,
+      productType: benefits.type,         // "tier" atau "addon"
+      billingPeriod: benefits.billingPeriod, // "monthly" atau "yearly"
+      basePlanId: basePlanId,
       purchaseToken: purchaseToken,
       status: status,
       platform: "google_play",
@@ -357,6 +498,8 @@ router.post("/verify", verifyToken, async (req, res) => {
         subscriptionId: subscriptionId,
         productId: productId,
         plan: benefits.name,
+        productType: benefits.type,
+        billingPeriod: benefits.billingPeriod,
         status: status,
         expiresAt: expiryTime ? expiryTime.toISOString() : null,
         addedStorage: benefits.addedStorage,
@@ -457,7 +600,7 @@ router.get("/status", verifyToken, async (req, res) => {
  * Body yang diharapkan:
  * {
  *   "transactionId": "transaction-id-dari-storekit",
- *   "productId": "vorce_explorer"
+ *   "productId": "vorce_basic"
  * }
  *
  * PERBEDAAN DENGAN GOOGLE PLAY:
@@ -479,14 +622,15 @@ router.post("/verify-apple", verifyToken, async (req, res) => {
       });
     }
 
-    // Cek apakah productId valid
-    const appleHelper = require("../helper/applestore");
-    const benefits = appleHelper.PRODUCT_BENEFITS[productId];
-    if (!benefits) {
+    // Cek apakah productId valid (ada di config lokal)
+    const productConfig = PRODUCT_BENEFITS[productId];
+    if (!productConfig) {
       return res.status(400).json({
         message: `Product '${productId}' tidak dikenali.`,
       });
     }
+
+    const appleHelper = require("../helper/applestore");
 
     // ─── B. CEK COMPANY ───
     const companyId = user.idCompany;
@@ -570,10 +714,26 @@ router.post("/verify-apple", verifyToken, async (req, res) => {
     }
 
     // ─── F. SIMPAN KE FIRESTORE ───
+    // Detect billing period dari Apple transaction data
+    // Apple StoreKit 2 menyimpan subscriptionPeriod di transaction
+    const appleSubPeriod = transactionData.subscriptionPeriod || "";
+    const isYearly = appleSubPeriod.includes("year") || appleSubPeriod.includes("P1Y");
+    const periodKey = isYearly ? "yearly" : "monthly";
+
+    // Resolve benefits menggunakan config lokal
+    const benefits = resolveBenefits(productId, periodKey);
+    if (!benefits) {
+      return res.status(400).json({
+        message: `Tidak dapat resolve benefit untuk ${productId}/${periodKey}.`,
+      });
+    }
+
     const subscriptionId = `${productId}_apple_${Date.now()}`;
 
     const subscriptionDoc = {
       productId: productId,
+      productType: benefits.type,             // "tier" atau "addon"
+      billingPeriod: benefits.billingPeriod,   // "monthly" atau "yearly"
       transactionId: transactionId,
       originalTransactionId: originalTransactionId,
       status: "active",
@@ -629,6 +789,8 @@ router.post("/verify-apple", verifyToken, async (req, res) => {
         subscriptionId: subscriptionId,
         productId: productId,
         plan: benefits.name,
+        productType: benefits.type,
+        billingPeriod: benefits.billingPeriod,
         platform: "apple",
         status: "active",
         expiresAt: expiryTime ? expiryTime.toISOString() : null,

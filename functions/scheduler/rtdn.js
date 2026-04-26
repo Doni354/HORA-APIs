@@ -75,8 +75,8 @@ function mapSubscriptionState(googleState) {
 }
 
 /**
- * Recalculate limits — sama persis dengan yang di subscription.js.
- * Formula: maxStorage/maxKaryawan = BASE + Σ(addon dari subscription aktif)
+ * Recalculate limits — HARUS sama persis dengan subscription.js.
+ * Tier plan MENGGANTIKAN free tier, addons stack di atas.
  */
 async function recalculateLimits(companyId) {
   const activeSubs = await db
@@ -86,27 +86,44 @@ async function recalculateLimits(companyId) {
     .where("status", "in", ["active", "grace_period"])
     .get();
 
-  let totalAddedStorage = 0;
-  let totalAddedKaryawan = 0;
+  // Pisahkan tier plan vs addons
+  let tierStorage = 0;
+  let tierKaryawan = 0;
+  let hasTierPlan = false;
+  let addonStorage = 0;
 
   activeSubs.forEach((doc) => {
     const data = doc.data();
-    totalAddedStorage += data.addedStorage || 0;
-    totalAddedKaryawan += data.addedKaryawan || 0;
+    if (data.productType === "tier") {
+      if (!hasTierPlan || data.addedStorage > tierStorage) {
+        tierStorage = data.addedStorage || 0;
+        tierKaryawan = data.addedKaryawan || 0;
+      }
+      hasTierPlan = true;
+    } else {
+      addonStorage += data.addedStorage || 0;
+    }
   });
+
+  const finalStorage = hasTierPlan
+    ? tierStorage + addonStorage
+    : BASE_MAX_STORAGE + addonStorage;
+  const finalKaryawan = hasTierPlan
+    ? tierKaryawan
+    : BASE_MAX_KARYAWAN;
 
   await db
     .collection("companies")
     .doc(companyId)
     .update({
-      maxStorage: BASE_MAX_STORAGE + totalAddedStorage,
-      maxKaryawan: BASE_MAX_KARYAWAN + totalAddedKaryawan,
+      maxStorage: finalStorage,
+      maxKaryawan: finalKaryawan,
     });
 
   console.log(
     `[RTDN] Recalculated limits for ${companyId}: ` +
-      `maxStorage=${BASE_MAX_STORAGE + totalAddedStorage}, ` +
-      `maxKaryawan=${BASE_MAX_KARYAWAN + totalAddedKaryawan}`
+      `maxStorage=${finalStorage} (tier=${hasTierPlan}), ` +
+      `maxKaryawan=${finalKaryawan}, addonStorage=${addonStorage}`
   );
 }
 

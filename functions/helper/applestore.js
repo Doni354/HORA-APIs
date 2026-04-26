@@ -67,18 +67,69 @@ const APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys";
 // ──────────────────────────────────────────────
 // PRODUCT CONFIG (sama dengan Google Play)
 // ──────────────────────────────────────────────
-// Product IDs harus SAMA di App Store Connect dan Google Play Console
+// Product IDs — Apple uses separate IDs per period (e.g. vorce_basic_month)
+// TYPE: "tier" = exclusive plan, "addon" = stackable storage
 const PRODUCT_BENEFITS = {
-  vorce_explorer: {
-    name: "Explorer Plan",
-    addedStorage: 1073741824, // 1 GB in bytes
-    addedKaryawan: 10,
-  },
-  // vorce_professional: {
-  //   name: "Professional Plan",
-  //   addedStorage: 5368709120,  // 5 GB
-  //   addedKaryawan: 50,
-  // },
+  // ── TIER PLANS (Google Play IDs — for shared config) ──
+  vorce_basic:      { name: "Basic Plan", type: "tier",
+    monthly: { addedStorage: 1073741824, addedKaryawan: 10 },
+    yearly:  { addedStorage: 12884901888, addedKaryawan: 10 } },
+  vorce_team:       { name: "Team Plan", type: "tier",
+    monthly: { addedStorage: 3221225472, addedKaryawan: 30 },
+    yearly:  { addedStorage: 38654705664, addedKaryawan: 30 } },
+  vorce_business:   { name: "Business Plan", type: "tier",
+    monthly: { addedStorage: 10737418240, addedKaryawan: 100 },
+    yearly:  { addedStorage: 128849018880, addedKaryawan: 100 } },
+  vorce_enterprise: { name: "Enterprise Plan", type: "tier",
+    monthly: { addedStorage: 32212254720, addedKaryawan: 300 },
+    yearly:  { addedStorage: 386547056640, addedKaryawan: 300 } },
+  // ── STORAGE ADDONS (Google Play IDs) ──
+  vorce_storage_1:  { name: "Storage Addon 3GB", type: "addon",
+    monthly: { addedStorage: 3221225472, addedKaryawan: 0 },
+    yearly:  { addedStorage: 38654705664, addedKaryawan: 0 } },
+  vorce_storage_2:  { name: "Storage Addon 10GB", type: "addon",
+    monthly: { addedStorage: 10737418240, addedKaryawan: 0 },
+    yearly:  { addedStorage: 128849018880, addedKaryawan: 0 } },
+  vorce_storage_3:  { name: "Storage Addon 30GB", type: "addon",
+    monthly: { addedStorage: 32212254720, addedKaryawan: 0 },
+    yearly:  { addedStorage: 386547056640, addedKaryawan: 0 } },
+  vorce_storage_4:  { name: "Storage Addon 60GB", type: "addon",
+    monthly: { addedStorage: 64424509440, addedKaryawan: 0 },
+    yearly:  { addedStorage: 773094113280, addedKaryawan: 0 } },
+  // ── APPLE-SPECIFIC TIER PLAN IDS ──
+  vorce_basic_month:      { name: "Basic Plan", type: "tier",
+    monthly: { addedStorage: 1073741824, addedKaryawan: 10 } },
+  vorce_basic_year:       { name: "Basic Plan", type: "tier",
+    yearly:  { addedStorage: 12884901888, addedKaryawan: 10 } },
+  vorce_team_month:       { name: "Team Plan", type: "tier",
+    monthly: { addedStorage: 3221225472, addedKaryawan: 30 } },
+  vorce_team_year:        { name: "Team Plan", type: "tier",
+    yearly:  { addedStorage: 38654705664, addedKaryawan: 30 } },
+  vorce_business_month:   { name: "Business Plan", type: "tier",
+    monthly: { addedStorage: 10737418240, addedKaryawan: 100 } },
+  vorce_business_year:    { name: "Business Plan", type: "tier",
+    yearly:  { addedStorage: 128849018880, addedKaryawan: 100 } },
+  vorce_enterprise_month: { name: "Enterprise Plan", type: "tier",
+    monthly: { addedStorage: 32212254720, addedKaryawan: 300 } },
+  vorce_enterprise_year:  { name: "Enterprise Plan", type: "tier",
+    yearly:  { addedStorage: 386547056640, addedKaryawan: 300 } },
+  // ── APPLE-SPECIFIC STORAGE ADDON IDS ──
+  vorce_storage_1_month:  { name: "Storage Addon 3GB", type: "addon",
+    monthly: { addedStorage: 3221225472, addedKaryawan: 0 } },
+  vorce_storage_1_year:   { name: "Storage Addon 3GB", type: "addon",
+    yearly:  { addedStorage: 38654705664, addedKaryawan: 0 } },
+  vorce_storage_2_month:  { name: "Storage Addon 10GB", type: "addon",
+    monthly: { addedStorage: 10737418240, addedKaryawan: 0 } },
+  vorce_storage_2_year:   { name: "Storage Addon 10GB", type: "addon",
+    yearly:  { addedStorage: 128849018880, addedKaryawan: 0 } },
+  vorce_storage_3_month:  { name: "Storage Addon 30GB", type: "addon",
+    monthly: { addedStorage: 32212254720, addedKaryawan: 0 } },
+  vorce_storage_3_year:   { name: "Storage Addon 30GB", type: "addon",
+    yearly:  { addedStorage: 386547056640, addedKaryawan: 0 } },
+  vorce_storage_4_month:  { name: "Storage Addon 60GB", type: "addon",
+    monthly: { addedStorage: 64424509440, addedKaryawan: 0 } },
+  vorce_storage_4_year:   { name: "Storage Addon 60GB", type: "addon",
+    yearly:  { addedStorage: 773094113280, addedKaryawan: 0 } },
 };
 
 // Subscription base limits (sama dengan playstore.js)
