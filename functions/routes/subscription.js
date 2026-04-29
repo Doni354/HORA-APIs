@@ -410,6 +410,26 @@ router.post("/verify", verifyToken, async (req, res) => {
     // orderId unik per transaksi (contoh: GPA.1234-5678-9012-34567)
     const orderId = subscriptionData.latestOrderId || null;
 
+    // ─── FRAUD CHECK: ORDER ID REUSE ───
+    // Mencegah double-hit dari Flutter yang kirim 2x verify
+    // untuk purchase yang sama (misal karena network retry).
+    // Ini layer kedua selain cek purchaseToken di subscription_tokens.
+    if (orderId) {
+      const existingOrder = await db
+        .collection("companies")
+        .doc(companyId)
+        .collection("subscriptions")
+        .where("orderId", "==", orderId)
+        .limit(1)
+        .get();
+
+      if (!existingOrder.empty) {
+        return res.status(409).json({
+          message: "Order ini sudah pernah diproses.",
+        });
+      }
+    }
+
     // ─── G. ACKNOWLEDGE KE GOOGLE PLAY ───
     // WAJIB dilakukan dalam 3 hari setelah purchase!
     // Kalau tidak, Google otomatis refund pembelian user.
@@ -556,6 +576,8 @@ router.get("/status", verifyToken, async (req, res) => {
       const sub = {
         id: doc.id,
         productId: data.productId,
+        productType: data.productType || null,
+        billingPeriod: data.billingPeriod || null,
         status: data.status,
         autoRenewing: data.autoRenewing,
         expiresAt: data.expiresAt?.toDate?.()?.toISOString() || null,
@@ -685,6 +707,25 @@ router.post("/verify-apple", verifyToken, async (req, res) => {
     const expiresDateMs = transactionData.expiresDate;
     const originalTransactionId = transactionData.originalTransactionId || transactionId;
     const bundleId = transactionData.bundleId;
+
+    // ─── FRAUD CHECK: ORIGINAL TRANSACTION REUSE ───
+    // Mencegah subscription Apple yang sama didaftarkan 2x
+    // (misal user double-tap verify di Flutter).
+    const existingAppleSub = await db
+      .collection("companies")
+      .doc(companyId)
+      .collection("subscriptions")
+      .where("originalTransactionId", "==", originalTransactionId)
+      .where("platform", "==", "apple")
+      .where("status", "in", ["active", "grace_period"])
+      .limit(1)
+      .get();
+
+    if (!existingAppleSub.empty) {
+      return res.status(409).json({
+        message: "Transaksi ini sudah pernah diproses.",
+      });
+    }
 
     // Validasi bundle ID
     if (bundleId && bundleId !== appleHelper.APPLE_BUNDLE_ID) {
