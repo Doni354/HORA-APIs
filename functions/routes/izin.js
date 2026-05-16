@@ -34,7 +34,50 @@ router.post("/", verifyToken, async (req, res) => {
       });
     }
 
-    // 2. Ambil Data File dari Collection 'files' Perusahaan
+    // 2. Cek Kuota Izin Perusahaan (jika ada)
+    const companyRef = db.collection("companies").doc(user.idCompany);
+    const companyDoc = await companyRef.get();
+
+    if (companyDoc.exists) {
+      const companyData = companyDoc.data();
+      if (companyData.leaveQuota !== undefined && companyData.leaveQuota !== null) {
+        const leaveQuota = Number(companyData.leaveQuota);
+
+        if (!isNaN(leaveQuota)) {
+          const now = new Date();
+          const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+          const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
+          const leavesSnapshot = await db
+            .collection("companies")
+            .doc(user.idCompany)
+            .collection("leaves")
+            .where("userId", "==", user.email)
+            .get();
+
+          let countBulanIni = 0;
+          leavesSnapshot.forEach((doc) => {
+            const data = doc.data();
+            const docDate = data.createdAt ? data.createdAt.toDate() : null;
+            
+            if (docDate && docDate >= startOfMonth && docDate <= endOfMonth) {
+              // Izin yang direject tidak masuk hitungan kuota
+              if (data.status !== "rejected") {
+                countBulanIni++;
+              }
+            }
+          });
+
+          if (countBulanIni >= leaveQuota) {
+            return res.status(403).json({
+              message: `Pengajuan izin ditolak. Anda sudah mencapai batas kuota izin bulan ini yaitu ${leaveQuota} kali.`,
+            });
+          }
+        }
+      }
+    }
+
+    // 3. Ambil Data File dari Collection 'files' Perusahaan
     const fileRef = db
       .collection("companies")
       .doc(user.idCompany)

@@ -59,7 +59,11 @@ router.put("/sendlink", async (req, res) => {
 
     // 3. Jika akun dijadwalkan dihapus
     if (userData.status === "pending_deletion") {
-      return res.status(403).send("Akun Anda dijadwalkan untuk dihapus. Cek email untuk membatalkan penghapusan.");
+      return res
+        .status(403)
+        .send(
+          "Akun Anda dijadwalkan untuk dihapus. Cek email untuk membatalkan penghapusan."
+        );
     }
 
     // --- CEK COOLDOWN ---
@@ -402,7 +406,10 @@ router.post("/login-google", async (req, res) => {
     // --- E. Cek Keamanan Device (dari Company doc) ---
     let companyData = null;
     if (data.idCompany) {
-      const companyDoc = await db.collection("companies").doc(data.idCompany).get();
+      const companyDoc = await db
+        .collection("companies")
+        .doc(data.idCompany)
+        .get();
       if (companyDoc.exists) {
         companyData = companyDoc.data();
       }
@@ -444,7 +451,9 @@ router.post("/login-google", async (req, res) => {
     });
     if (fcmCleanupPromises.length > 0) {
       await Promise.all(fcmCleanupPromises);
-      console.log(`Cleaned FCM token from ${fcmCleanupPromises.length} other user(s)`);
+      console.log(
+        `Cleaned FCM token from ${fcmCleanupPromises.length} other user(s)`
+      );
     }
 
     // Update data login terakhir di user doc
@@ -457,9 +466,12 @@ router.post("/login-google", async (req, res) => {
     // Update device binding di Company doc (selalu simpan untuk tracking)
     // Enforcement (blokir) hanya terjadi jika deviceLockEnabled = true
     if (data.idCompany) {
-      await db.collection("companies").doc(data.idCompany).update({
-        [`deviceBindings.${email.replace(/\./g, "_")}`]: deviceId,
-      });
+      await db
+        .collection("companies")
+        .doc(data.idCompany)
+        .update({
+          [`deviceBindings.${email.replace(/\./g, "_")}`]: deviceId,
+        });
     }
 
     const tokenPayload = {
@@ -556,7 +568,9 @@ router.get("/confirm-email", async (req, res) => {
     if (!data.verifyToken || data.verifyToken !== token) {
       return res
         .status(400)
-        .send("Link verifikasi sudah tidak valid atau sudah pernah digunakan. Silakan login ulang di aplikasi untuk mendapatkan link baru.");
+        .send(
+          "Link verifikasi sudah tidak valid atau sudah pernah digunakan. Silakan login ulang di aplikasi untuk mendapatkan link baru."
+        );
     }
 
     // 2. Validasi Expired
@@ -687,10 +701,10 @@ router.post("/registrasi", async (req, res) => {
         alamatLoc,
         totalLike: 0,
         // --- BATASAN SISTEM (FREE TIER) ---
-        maxKaryawan: 3,          // Default: 3 Orang (base limit)
-        maxStorage: 104857600,   // Default: 100 MB in bytes (base limit)
-        usedStorage: 0,          // Terpakai: 0 Bytes
-        totalEmployees: 0,       // Sync: 0 karyawan (owner tidak dihitung)
+        maxKaryawan: 3, // Default: 3 Orang (base limit)
+        maxStorage: 104857600, // Default: 100 MB in bytes (base limit)
+        usedStorage: 0, // Terpakai: 0 Bytes
+        totalEmployees: 0, // Sync: 0 karyawan (owner tidak dihitung)
         // --- DEVICE LOCK (Default OFF) ---
         deviceLockEnabled: false,
         deviceBindings: {},
@@ -747,8 +761,9 @@ router.post("/registrasi", async (req, res) => {
         error: "USER_EXISTS_WITH_COMPANY",
       });
     }
+    
     console.error("Registrasi Error:", e);
-    return res.status(500).json({ message: "Server Error" });
+    return res.status(500).json({ message: "Server Error", error: e.message, });
   }
 });
 
@@ -1335,7 +1350,7 @@ router.post("/demo-login", async (req, res) => {
     };
 
     const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, {
-      expiresIn: "7d",
+      expiresIn: "30d",
     });
 
     // Update lastLogin untuk tracking
