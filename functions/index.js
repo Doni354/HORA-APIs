@@ -19,12 +19,12 @@ const reimburseRoutes = require("./routes/reimburse");
 const subscriptionRoutes = require("./routes/subscription");
 const FCM = require("./FCM/fcm");
 const { scheduledAccountCleanup } = require("./scheduler/scheduler");
-const { onPlayRtdn } = require("./scheduler/rtdn");
+const { notifRTDN } = require("./scheduler/rtdn");
 // ---------------------------------------------------------
 // FCM
 // ---------------------------------------------------------
 // Export function
-exports.onNewCompanyMessage = FCM.onNewCompanyMessage;
+exports.notifFCM = FCM.notifFCM;
 
 // ---------------------------------------------------------
 // SCHEDULER: Auto-delete expired accounts (daily 02:00 WIB)
@@ -34,7 +34,7 @@ exports.scheduledAccountCleanup = scheduledAccountCleanup;
 // ---------------------------------------------------------
 // PUB/SUB: Google Play RTDN (Real-time Developer Notifications)
 // ---------------------------------------------------------
-exports.onPlayRtdn = onPlayRtdn;
+exports.notifRTDN = notifRTDN;
 
 // ---------------------------------------------------------
 // Cloud Functions Global Config

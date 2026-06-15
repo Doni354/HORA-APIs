@@ -132,7 +132,7 @@ async function recalculateLimits(companyId) {
 // ──────────────────────────────────────────────
 
 /**
- * onPlayRtdn
+ * notifRTDN
  *
  * Firebase Functions v2 Pub/Sub trigger.
  * Otomatis di-invoke ketika ada message baru di topic "play-rtdn".
@@ -143,7 +143,7 @@ async function recalculateLimits(companyId) {
  * - Kalau throw error, Firebase RETRY otomatis (dengan backoff)
  * - Tidak perlu return status code (bukan HTTP endpoint)
  */
-const onPlayRtdn = onMessagePublished(
+const notifRTDN = onMessagePublished(
   {
     topic: "play-rtdn",
     region: "asia-southeast2",
@@ -282,4 +282,4 @@ const onPlayRtdn = onMessagePublished(
   }
 );
 
-module.exports = { onPlayRtdn };
+module.exports = { notifRTDN };

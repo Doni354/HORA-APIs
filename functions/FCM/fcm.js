@@ -15,7 +15,7 @@ if (admin.apps.length === 0) {
  * 2. Jika Mention biasa: Target dapat notif 'Menyebut anda', yang lain dapat notif biasa.
  * 3. Jika Pesan biasa: Semua anggota (selain pengirim) dapat notif.
  */
-exports.onNewCompanyMessage = onDocumentCreated(
+exports.notifFCM = onDocumentCreated(
   {
     document: "companies/{companyId}/messages/{messageId}",
     region: "asia-southeast2",
