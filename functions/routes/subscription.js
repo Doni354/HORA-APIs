@@ -25,6 +25,7 @@ const {
   acknowledgeSubscription,
   BASE_MAX_STORAGE,
   BASE_MAX_KARYAWAN,
+  BASE_MAX_DEVICES,
 } = require("../helper/playstore");
 
 const router = express.Router();
@@ -98,6 +99,25 @@ const PRODUCT_BENEFITS = {
     yearly:  { addedStorage: 773094113280, addedKaryawan: 0 },      // 720 GB
   },
 
+  // ── VELINKED PLANS (Google Play) ──
+  // Subscription group terpisah dari Vorce. Pure max_devices saja.
+  // Pro = 10 devices, Pro Plus = 50 devices, Pro Max = 200 devices
+  velinked_pro: {
+    name: "Velinked Pro", type: "velinked",
+    monthly: { addedStorage: 0, addedKaryawan: 0, maxDevices: 10 },
+    yearly:  { addedStorage: 0, addedKaryawan: 0, maxDevices: 10 },
+  },
+  velinked_pro_plus: {
+    name: "Velinked Pro Plus", type: "velinked",
+    monthly: { addedStorage: 0, addedKaryawan: 0, maxDevices: 50 },
+    yearly:  { addedStorage: 0, addedKaryawan: 0, maxDevices: 50 },
+  },
+  velinked_pro_max: {
+    name: "Velinked Pro Max", type: "velinked",
+    monthly: { addedStorage: 0, addedKaryawan: 0, maxDevices: 200 },
+    // Note: velinked_pro_max hanya monthly di Google Play Console
+  },
+
   // ──────────────────────────────────────────────
   // B. APPLE PRODUCT IDS
   //    Apple pakai productId terpisah per period (bukan basePlanId)
@@ -139,6 +159,20 @@ const PRODUCT_BENEFITS = {
     monthly: { addedStorage: 64424509440, addedKaryawan: 0 } },       // 60 GB
   vorce_storage_4_year:   { name: "Storage Addon 60GB", type: "addon",
     yearly:  { addedStorage: 773094113280, addedKaryawan: 0 } },      // 720 GB
+
+  // ── VELINKED PLANS (Apple) ──
+  velinked_pro_max_month:  { name: "Velinked Pro Max", type: "velinked",
+    monthly: { addedStorage: 0, addedKaryawan: 0, maxDevices: 200 } },
+  velinked_pro_max_year:   { name: "Velinked Pro Max", type: "velinked",
+    yearly:  { addedStorage: 0, addedKaryawan: 0, maxDevices: 200 } },
+  velinked_pro_plus_month: { name: "Velinked Pro Plus", type: "velinked",
+    monthly: { addedStorage: 0, addedKaryawan: 0, maxDevices: 50 } },
+  velinked_pro_plus_year:  { name: "Velinked Pro Plus", type: "velinked",
+    yearly:  { addedStorage: 0, addedKaryawan: 0, maxDevices: 50 } },
+  velinked_pro_month:      { name: "Velinked Pro", type: "velinked",
+    monthly: { addedStorage: 0, addedKaryawan: 0, maxDevices: 10 } },
+  velinked_pro_year:       { name: "Velinked Pro", type: "velinked",
+    yearly:  { addedStorage: 0, addedKaryawan: 0, maxDevices: 10 } },
 };
 
 /**
@@ -164,6 +198,7 @@ function resolveBenefits(productId, basePlanId) {
     type: product.type,
     addedStorage: benefits.addedStorage,
     addedKaryawan: benefits.addedKaryawan,
+    maxDevices: benefits.maxDevices || 0,
     billingPeriod: period,
   };
 }
@@ -234,11 +269,13 @@ async function recalculateLimits(companyId) {
     .where("status", "in", ["active", "grace_period"])
     .get();
 
-  // 2. Pisahkan tier plan vs addons
+  // 2. Pisahkan tier plan vs addons vs velinked
   let tierStorage = 0;
   let tierKaryawan = 0;
   let hasTierPlan = false;
   let addonStorage = 0;
+  let velinkedMaxDevices = 0;
+  let hasVelinkedPlan = false;
 
   activeSubs.forEach((doc) => {
     const data = doc.data();
@@ -249,6 +286,13 @@ async function recalculateLimits(companyId) {
         tierKaryawan = data.addedKaryawan || 0;
       }
       hasTierPlan = true;
+    } else if (data.productType === "velinked") {
+      // Velinked plan: ambil yang tertinggi (exclusive, 1 aktif)
+      const devLimit = data.maxDevices || 0;
+      if (!hasVelinkedPlan || devLimit > velinkedMaxDevices) {
+        velinkedMaxDevices = devLimit;
+      }
+      hasVelinkedPlan = true;
     } else {
       // Addon: stack semua
       addonStorage += data.addedStorage || 0;
@@ -262,6 +306,9 @@ async function recalculateLimits(companyId) {
   const finalKaryawan = hasTierPlan
     ? tierKaryawan                            // Tier's max karyawan
     : BASE_MAX_KARYAWAN;                      // Free tier default
+  const finalMaxDevices = hasVelinkedPlan
+    ? velinkedMaxDevices                      // Velinked plan's max devices
+    : BASE_MAX_DEVICES;                       // Default: 0 (fitur premium)
 
   // 4. Update company document
   await db
@@ -270,12 +317,14 @@ async function recalculateLimits(companyId) {
     .update({
       maxStorage: finalStorage,
       maxKaryawan: finalKaryawan,
+      max_devices: finalMaxDevices,
     });
 
   console.log(
     `[Subscription] Recalculated limits for ${companyId}: ` +
       `maxStorage=${finalStorage} (tier=${hasTierPlan}), ` +
-      `maxKaryawan=${finalKaryawan}, addonStorage=${addonStorage}`
+      `maxKaryawan=${finalKaryawan}, addonStorage=${addonStorage}, ` +
+      `max_devices=${finalMaxDevices} (velinked=${hasVelinkedPlan})`
   );
 }
 
@@ -473,6 +522,7 @@ router.post("/verify", verifyToken, async (req, res) => {
       orderId: orderId,
       addedStorage: benefits.addedStorage,
       addedKaryawan: benefits.addedKaryawan,
+      maxDevices: benefits.maxDevices,
       acknowledgedAt: Timestamp.now(),
       purchasedBy: user.email,
       createdAt: Timestamp.now(),
@@ -524,6 +574,7 @@ router.post("/verify", verifyToken, async (req, res) => {
         expiresAt: expiryTime ? expiryTime.toISOString() : null,
         addedStorage: benefits.addedStorage,
         addedKaryawan: benefits.addedKaryawan,
+        maxDevices: benefits.maxDevices,
       },
     });
   } catch (e) {
@@ -786,6 +837,7 @@ router.post("/verify-apple", verifyToken, async (req, res) => {
       autoRenewing: true, // Default true untuk auto-renewable subscription
       addedStorage: benefits.addedStorage,
       addedKaryawan: benefits.addedKaryawan,
+      maxDevices: benefits.maxDevices,
       purchasedBy: user.email,
       createdAt: Timestamp.now(),
     };
@@ -837,6 +889,7 @@ router.post("/verify-apple", verifyToken, async (req, res) => {
         expiresAt: expiryTime ? expiryTime.toISOString() : null,
         addedStorage: benefits.addedStorage,
         addedKaryawan: benefits.addedKaryawan,
+        maxDevices: benefits.maxDevices,
       },
     });
   } catch (e) {

@@ -55,6 +55,7 @@ const {
   verifySubscription,
   BASE_MAX_STORAGE,
   BASE_MAX_KARYAWAN,
+  BASE_MAX_DEVICES,
 } = require("../helper/playstore");
 
 // ──────────────────────────────────────────────
@@ -86,11 +87,13 @@ async function recalculateLimits(companyId) {
     .where("status", "in", ["active", "grace_period"])
     .get();
 
-  // Pisahkan tier plan vs addons
+  // Pisahkan tier plan vs addons vs velinked
   let tierStorage = 0;
   let tierKaryawan = 0;
   let hasTierPlan = false;
   let addonStorage = 0;
+  let velinkedMaxDevices = 0;
+  let hasVelinkedPlan = false;
 
   activeSubs.forEach((doc) => {
     const data = doc.data();
@@ -100,6 +103,13 @@ async function recalculateLimits(companyId) {
         tierKaryawan = data.addedKaryawan || 0;
       }
       hasTierPlan = true;
+    } else if (data.productType === "velinked") {
+      // Velinked plan: ambil yang tertinggi (exclusive, 1 aktif)
+      const devLimit = data.maxDevices || 0;
+      if (!hasVelinkedPlan || devLimit > velinkedMaxDevices) {
+        velinkedMaxDevices = devLimit;
+      }
+      hasVelinkedPlan = true;
     } else {
       addonStorage += data.addedStorage || 0;
     }
@@ -111,6 +121,9 @@ async function recalculateLimits(companyId) {
   const finalKaryawan = hasTierPlan
     ? tierKaryawan
     : BASE_MAX_KARYAWAN;
+  const finalMaxDevices = hasVelinkedPlan
+    ? velinkedMaxDevices
+    : BASE_MAX_DEVICES;
 
   await db
     .collection("companies")
@@ -118,12 +131,14 @@ async function recalculateLimits(companyId) {
     .update({
       maxStorage: finalStorage,
       maxKaryawan: finalKaryawan,
+      max_devices: finalMaxDevices,
     });
 
   console.log(
     `[RTDN] Recalculated limits for ${companyId}: ` +
       `maxStorage=${finalStorage} (tier=${hasTierPlan}), ` +
-      `maxKaryawan=${finalKaryawan}, addonStorage=${addonStorage}`
+      `maxKaryawan=${finalKaryawan}, addonStorage=${addonStorage}, ` +
+      `max_devices=${finalMaxDevices} (velinked=${hasVelinkedPlan})`
   );
 }
 

@@ -705,6 +705,7 @@ router.post("/registrasi", async (req, res) => {
         maxStorage: 104857600, // Default: 100 MB in bytes (base limit)
         usedStorage: 0, // Terpakai: 0 Bytes
         totalEmployees: 0, // Sync: 0 karyawan (owner tidak dihitung)
+        max_devices: 0, // Default: 0 (Velinked fitur premium, harus beli subscription)
         // --- DEVICE LOCK (Default OFF) ---
         deviceLockEnabled: false,
         deviceBindings: {},
