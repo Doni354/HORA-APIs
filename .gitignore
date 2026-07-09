@@ -69,3 +69,4 @@ node_modules/
 .dataconnect
 functions/GoogleApiKey.json
 functions/SubscriptionKey_*.p8
+functions/FirebaseServiceKey.json

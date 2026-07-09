@@ -1,7 +1,6 @@
 /* eslint-disable */
 const Busboy = require("busboy");
 const path = require("path");
-const { bucket } = require("../config/firebase");
 const { PutObjectCommand } = require("@aws-sdk/client-s3");
 const { r2 } = require("../config/r2");
 const BUCKET_NAME = "vorce";
@@ -75,14 +74,17 @@ const uploadFile = (req, folderName, fileNameFunc) => {
       try {
         const finalFileName = fileNameFunc(fileExt);
         const filePath = `${folderName}/${finalFileName}`;
-        const fileRef = bucket.file(filePath);
 
-        await fileRef.save(fileBuffer, {
-          metadata: { contentType: fileMime },
-          public: true,
-        });
+        await r2.send(
+          new PutObjectCommand({
+            Bucket: BUCKET_NAME,
+            Key: filePath,
+            Body: fileBuffer,
+            ContentType: fileMime,
+          })
+        );
 
-        const publicUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
+        const publicUrl = `https://cdn.vorce.id/${filePath}`;
         resolve(publicUrl);
       } catch (e) {
         reject(e);
@@ -98,70 +100,8 @@ const uploadFile = (req, folderName, fileNameFunc) => {
 };
 
 // ---------------------------------------------------------
-// HELPER: Upload File Berkas (Returns Detail Metadata)
+// HELPER: Upload File Berkas (Returns Detail Metadata) - CS was removed
 // ---------------------------------------------------------
-const uploadFileBerkasCS = (req, folderName) => {
-  return new Promise((resolve, reject) => {
-    const busboy = Busboy({ headers: req.headers });
-    let fileBuffer = null;
-    let fileInfo = {};
-
-    busboy.on("file", (fieldname, file, info) => {
-      const { filename, mimeType } = info;
-      fileInfo = { filename, mimeType };
-
-      const chunks = [];
-      file.on("data", (data) => chunks.push(data));
-      file.on("end", () => {
-        fileBuffer = Buffer.concat(chunks);
-      });
-    });
-
-    busboy.on("finish", async () => {
-      if (!fileBuffer)
-        return reject(new Error("Tidak ada file yang diupload."));
-
-      try {
-        // 1. Generate Nama File Unik
-        const safeFileName = fileInfo.filename.replace(/[^a-zA-Z0-9.-]/g, "_");
-        const storagePath = `${folderName}/${Date.now()}_${safeFileName}`;
-
-        const fileRef = bucket.file(storagePath);
-
-        // 2. Upload ke GCS
-        await fileRef.save(fileBuffer, {
-          metadata: { contentType: fileInfo.mimeType },
-          public: true,
-        });
-
-        const publicUrl = `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
-
-        // 3. Hitung Ukuran Dinamis (IMPROVED)
-        const sizeBytes = fileBuffer.length;
-        const sizeDisplay = formatFileSize(sizeBytes); // Pakai helper di atas
-
-        // Return Object Lengkap
-        resolve({
-          publicUrl,
-          storagePath,
-          originalName: fileInfo.filename,
-          mimeType: fileInfo.mimeType,
-          sizeDisplay: sizeDisplay, // Contoh: "500 B", "12 KB", "1.5 MB"
-          sizeBytes: sizeBytes,
-        });
-      } catch (e) {
-        reject(e);
-      }
-    });
-
-    if (req.rawBody) {
-      busboy.end(req.rawBody);
-    } else {
-      req.pipe(busboy);
-    }
-  });
-};
-
 // ---------------------------------------------------------
 // HELPER: Upload File Berkas to Cloudflare R2 untuk nanti
 // ---------------------------------------------------------

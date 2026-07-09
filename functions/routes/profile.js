@@ -5,6 +5,9 @@ const jwt = require("jsonwebtoken");
 const { db } = require("../config/firebase");
 const { verifyToken } = require("../middleware/token");
 const { uploadFile } = require("../helper/uploadFile");
+const { DeleteObjectCommand } = require("@aws-sdk/client-s3");
+const { r2 } = require("../config/r2");
+const BUCKET_NAME = "vorce";
 const router = express.Router();
 const { Timestamp } = require("firebase-admin/firestore");
 const { logCompanyActivity } = require("../helper/logCompanyActivity");
@@ -214,13 +217,19 @@ router.post("/company-logo", verifyToken, async (req, res) => {
     if (oldLogoUrl) {
         try {
             // Cek apakah URL-nya dari storage kita (bukan link external sembarang)
-            // Format URL: https://storage.googleapis.com/BUCKET_NAME/FOLDER/FILE
-            if (oldLogoUrl.includes("storage.googleapis.com")) {
-                // Ambil path file dari URL
-                // Kita split berdasarkan nama bucket agar aman
-                const filePath = oldLogoUrl.split(`/${bucket.name}/`)[1];
+            if (oldLogoUrl.includes("cdn.vorce.id") || oldLogoUrl.includes("storage.googleapis.com")) {
+                const isLegacy = oldLogoUrl.includes("storage.googleapis.com");
+                const filePath = isLegacy 
+                  ? oldLogoUrl.split(/hora-7394b\.firebasestorage\.app\/|vorce\//)[1] 
+                  : oldLogoUrl.split(`https://cdn.vorce.id/`)[1];
+                  
                 if (filePath) {
-                    await bucket.file(decodeURIComponent(filePath)).delete();
+                    await r2.send(
+                        new DeleteObjectCommand({
+                            Bucket: BUCKET_NAME,
+                            Key: decodeURIComponent(filePath),
+                        })
+                    );
                     console.log("Deleted old logo:", filePath);
                 }
             }
@@ -421,10 +430,19 @@ router.post("/upload-avatar", verifyToken, async (req, res) => {
         try {
             // PENTING: Hanya hapus jika file ada di bucket kita
             // Jangan hapus jika URL-nya 'lh3.googleusercontent.com' (Foto bawaan Gmail)
-            if (oldPhotoUrl.includes("storage.googleapis.com")) {
-                const filePath = oldPhotoUrl.split(`/${bucket.name}/`)[1];
+            if (oldPhotoUrl.includes("cdn.vorce.id") || oldPhotoUrl.includes("storage.googleapis.com")) {
+                const isLegacy = oldPhotoUrl.includes("storage.googleapis.com");
+                const filePath = isLegacy 
+                  ? oldPhotoUrl.split(/hora-7394b\.firebasestorage\.app\/|vorce\//)[1] 
+                  : oldPhotoUrl.split(`https://cdn.vorce.id/`)[1];
+
                 if (filePath) {
-                    await bucket.file(decodeURIComponent(filePath)).delete();
+                    await r2.send(
+                        new DeleteObjectCommand({
+                            Bucket: BUCKET_NAME,
+                            Key: decodeURIComponent(filePath),
+                        })
+                    );
                     console.log("Deleted old user photo:", filePath);
                 }
             }

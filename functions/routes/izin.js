@@ -1,7 +1,10 @@
 /* eslint-disable */
 const express = require("express");
 const router = express.Router();
-const { db, bucket } = require("../config/firebase");
+const { db } = require("../config/firebase");
+const { DeleteObjectCommand } = require("@aws-sdk/client-s3");
+const { r2 } = require("../config/r2");
+const BUCKET_NAME = "vorce";
 const { verifyToken } = require("../middleware/token");
 const { logCompanyActivity } = require("../helper/logCompanyActivity");
 // FIX: Import Timestamp dan FieldValue langsung dari module-nya
@@ -322,7 +325,12 @@ router.put("/:leaveId", verifyToken, async (req, res) => {
         // 2. Hapus file lama dari Storage (Cleanup)
         if (currentData.attachmentPath) {
           try {
-            await bucket.file(currentData.attachmentPath).delete();
+            await r2.send(
+              new DeleteObjectCommand({
+                Bucket: BUCKET_NAME,
+                Key: decodeURIComponent(currentData.attachmentPath),
+              })
+            );
           } catch (err) {
             console.warn("Gagal hapus file lama:", err.message);
           }
@@ -403,7 +411,12 @@ router.delete("/:leaveId", verifyToken, async (req, res) => {
     if (data.attachmentFileId) {
       try {
         if (data.attachmentPath) {
-          await bucket.file(data.attachmentPath).delete();
+          await r2.send(
+            new DeleteObjectCommand({
+              Bucket: BUCKET_NAME,
+              Key: decodeURIComponent(data.attachmentPath),
+            })
+          );
         }
         await db
           .collection("companies")

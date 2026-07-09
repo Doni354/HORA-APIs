@@ -1,7 +1,7 @@
 /* eslint-disable */
 const express = require("express");
 const router = express.Router();
-const { db, bucket } = require("../config/firebase");
+const { db } = require("../config/firebase");
 const { verifyToken } = require("../middleware/token");
 const { logCompanyActivity } = require("../helper/logCompanyActivity");
 const Busboy = require("busboy");
@@ -81,7 +81,12 @@ router.post("/upload", verifyToken, async (req, res) => {
     if (usedStorage + newFileSize > maxStorage) {
         // ROLLBACK: Hapus file yang barusan diupload karena melampaui batas
         try {
-            await bucket.file(result.storagePath).delete();
+            await r2.send(
+              new DeleteObjectCommand({
+                Bucket: BUCKET_NAME,
+                Key: decodeURIComponent(result.storagePath),
+              })
+            );
         } catch (delErr) {
             console.error("Gagal rollback file:", delErr);
         }
@@ -212,7 +217,12 @@ router.post("/upload-noLogs", verifyToken, async (req, res) => {
     if (usedStorage + newFileSize > maxStorage) {
         // ROLLBACK: Hapus file yang barusan diupload karena melampaui batas
         try {
-            await bucket.file(result.storagePath).delete();
+            await r2.send(
+              new DeleteObjectCommand({
+                Bucket: BUCKET_NAME,
+                Key: decodeURIComponent(result.storagePath),
+              })
+            );
         } catch (delErr) {
             console.error("Gagal rollback file:", delErr);
         }
@@ -522,12 +532,7 @@ router.delete("/:fileId", verifyToken, async (req, res) => {
       );
     }
 
-    // 🔥 Firebase Storage (LEGACY - OPTIONAL)
-    if (fileData?.legacy === true && fileData?.storagePath) {
-      deleteTasks.push(
-        bucket.file(fileData.storagePath).delete()
-      );
-    }
+    // Removed Firebase Fallback since migration is complete.
 
     const results = await Promise.allSettled(deleteTasks);
 
