@@ -2,6 +2,7 @@
 const express = require("express")
 const { Timestamp } = require("firebase-admin/firestore")
 const { db } = require("../config/firebase")
+const { resolveUserShift, calculateLateness, ShiftScheduleError } = require("../helper/shiftScheduleService")
 
 const router = express.Router()
 
@@ -196,38 +197,18 @@ router.post("/", async (req, res) => {
     if (!NamaPerusahaan) return res.status(400).json({ message: "NamaPerusahaan wajib diisi" });
     if (!idBerkasFoto) return res.status(400).json({ message: "idBerkasFoto wajib diisi (Upload foto terlebih dahulu)" });
 
-    // 2. Ambil URL Foto
-    const photoURL = await getFileUrlById(IDPerusahaan, idBerkasFoto);
-    if (!photoURL) {
-      return res.status(404).json({ message: "File foto tidak ditemukan di database perusahaan." });
-    }
-
-    // 3. Logic Shift
+    // 2. Resolve Shift dari Schedule (dilakukan lebih awal agar reject cepat)
     const now = new Date();
-    const currentHour = parseInt(
-      now.toLocaleString("en-US", {
-        timeZone: "Asia/Jakarta",
-        hour: "numeric",
-        hour12: false,
-      })
+    const { schedule, shift } = await resolveUserShift(
+      IDPerusahaan, IDKaryawan, now, zone
     );
 
-    let detectedShift = "";
-    if (currentHour >= 7 && currentHour < 15) {
-      detectedShift = "Pagi";
-    } else if (currentHour >= 15 && currentHour < 23) {
-      detectedShift = "Siang";
-    } else {
-      detectedShift = "Malam";
-    }
-
-    // 4. Cek Double Check-in (Sub-Collection)
+    // 3. Cek Double Check-in (Sub-Collection)
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 
-    // PERUBAHAN: Cek di Sub-Collection
     const existingCheckIn = await db
       .collection("companies")
       .doc(IDPerusahaan)
@@ -242,7 +223,16 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ message: "Sudah check in hari ini" });
     }
 
-    // 5. Save to Firestore (Sub-Collection)
+    // 4. Ambil URL Foto
+    const photoURL = await getFileUrlById(IDPerusahaan, idBerkasFoto);
+    if (!photoURL) {
+      return res.status(404).json({ message: "File foto tidak ditemukan di database perusahaan." });
+    }
+
+    // 5. Hitung keterlambatan
+    const { isLate, lateMinutes } = calculateLateness(shift, now, zone);
+
+    // 6. Save to Firestore (Sub-Collection)
     const absensiData = {
       idKaryawan: IDKaryawan,
       namaKaryawan: NamaKaryawan,
@@ -251,11 +241,14 @@ router.post("/", async (req, res) => {
       alamatLoc: AlamatLoc || "",
       idPerusahaan: IDPerusahaan,
       namaPerusahaan: NamaPerusahaan,
-      shift: detectedShift,
+      shift: shift.name,
+      shiftId: schedule.shiftId,
+      scheduleId: schedule.id,
+      telat: isLate ? `${lateMinutes} menit` : null,
       tanggal: Timestamp.now(),
       waktuCheckIn: Timestamp.now(),
       waktuCheckOut: null,
-      fotoCheckIn: photoURL, 
+      fotoCheckIn: photoURL,
       fotoCheckOut: null,
       latitudeCheckOut: null,
       longtitudeCheckOut: null,
@@ -266,7 +259,6 @@ router.post("/", async (req, res) => {
       createdAt: Timestamp.now(),
     };
 
-    // PERUBAHAN: Simpan ke Sub-Collection
     const docRef = await db
       .collection("companies")
       .doc(IDPerusahaan)
@@ -274,13 +266,27 @@ router.post("/", async (req, res) => {
       .add(absensiData);
 
     return res.status(200).json({
-      message: `Absensi Berhasil (Shift ${detectedShift})`,
+      message: `Absensi Berhasil (Shift ${shift.name})`,
       id: docRef.id,
       fotoURL: photoURL,
-      shift: detectedShift
+      shift: shift.name,
+      isLate,
+      lateMinutes: isLate ? lateMinutes : 0,
     });
 
   } catch (err) {
+    // Handle error dari ShiftScheduleService
+    if (err instanceof ShiftScheduleError) {
+      const statusMap = {
+        NO_ACTIVE_SCHEDULE: 403,
+        SHIFT_NOT_FOUND: 500,
+        MULTIPLE_SHIFTS: 409,
+      };
+      return res.status(statusMap[err.code] || 400).json({
+        message: err.message,
+        code: err.code,
+      });
+    }
     console.error("Check in error:", err);
     return res.status(500).json({ message: "Gagal menyimpan absensi", error: err.message });
   }
