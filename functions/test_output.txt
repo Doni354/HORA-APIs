@@ -1,0 +1,49 @@
+  console.error
+    Confirm Upload Error: TypeError: companyRef.collection is not a function
+        at collection (D:\Project\HORA-APIs\functions\routes\berkas.js:599:30)
+        at processTicksAndRejections (node:internal/process/task_queues:105:5)
+        at Object.<anonymous> (D:\Project\HORA-APIs\functions\__tests__\presign.test.js:182:9)
+        at D:\Project\HORA-APIs\functions\routes\berkas.js:588:5
+
+    [0m [90m 656 |[39m       [36mreturn[39m res[33m.[39mstatus([35m404[39m)[33m.[39mjson({ message[33m:[39m [32m"Perusahaan tidak ditemukan."[39m })[33m;[39m
+     [90m 657 |[39m     }
+    [31m[1m>[22m[39m[90m 658 |[39m     console[33m.[39merror([32m"Confirm Upload Error:"[39m[33m,[39m e)[33m;[39m
+     [90m     |[39m             [31m[1m^[22m[39m
+     [90m 659 |[39m     [36mreturn[39m res[33m.[39mstatus([35m500[39m)[33m.[39mjson({ message[33m:[39m [32m"Server Error"[39m[33m,[39m error[33m:[39m e[33m.[39mmessage })[33m;[39m
+     [90m 660 |[39m   }
+     [90m 661 |[39m })[33m;[39m[0m
+
+      at error (routes/berkas.js:658:13)
+
+FAIL __tests__/presign.test.js
+  Presigned URL Flow Tests
+    POST /api/berkas/presign
+      ΓêÜ harus sukses mengembalikan presigned URL jika input valid dan kuota cukup (23 ms)
+      ΓêÜ harus menolak jika mime type tidak diizinkan (4 ms)
+      ΓêÜ harus menolak jika file lebih dari MAX_FILE_SIZE (100MB) (3 ms)
+    POST /api/berkas/confirm-upload
+      ├ù harus sukses mengkonfirmasi upload dengan validasi R2 HeadObjectCommand (46 ms)
+      ΓêÜ harus menolak jika objectKey tidak ditemukan di R2 (5 ms)
+
+  ΓùÅ Presigned URL Flow Tests ΓÇ║ POST /api/berkas/confirm-upload ΓÇ║ harus sukses mengkonfirmasi upload dengan validasi R2 HeadObjectCommand
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 201
+    Received: 500
+
+      193 |         });
+      194 |
+    > 195 |       expect(res.status).toBe(201);
+          |                          ^
+      196 |       expect(res.body.message).toMatch(/berhasil/i);
+      197 |       expect(res.body.data.mimeType).toBe("image/jpeg");
+      198 |       expect(res.body.data.sizeBytes).toBe(5 * 1024 * 1024);
+
+      at Object.toBe (__tests__/presign.test.js:195:26)
+
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 4 passed, 5 total
+Snapshots:   0 total
+Time:        0.603 s, estimated 1 s
+Ran all test suites matching __tests__/presign.test.js.

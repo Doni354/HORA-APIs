@@ -2,6 +2,9 @@
 const admin = require("firebase-admin");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { db } = require("../config/firebase");
+const { DeleteObjectCommand } = require("@aws-sdk/client-s3");
+const { r2 } = require("../config/r2");
+const BUCKET_NAME = "vorce";
 
 /**
  * SCHEDULED ACCOUNT CLEANUP
@@ -113,4 +116,91 @@ const scheduledAccountCleanup = onSchedule(
   }
 );
 
-module.exports = { scheduledAccountCleanup };
+/**
+ * ORPHAN UPLOAD CLEANUP
+ * Jalan otomatis setiap jam.
+ *
+ * Strategi: Upload Registry (Firestore collection _upload_pending)
+ * ------------------------------------------------------------------
+ * Saat FE memanggil POST /berkas/presign, API menulis doc ke
+ * _upload_pending/{uuid} dengan field expiresAt = now + 15 menit.
+ *
+ * Skenario orphan:
+ *   - FE crash / network error setelah upload ke R2 tapi sebelum /confirm-upload
+ *   - FE tidak pernah memanggil /confirm-upload (expired)
+ *
+ * Job ini:
+ *   1. Query _upload_pending dimana expiresAt <= now
+ *   2. Untuk setiap entry expired: delete objectKey dari R2 (best-effort)
+ *   3. Delete doc dari _upload_pending
+ *
+ * Trade-off:
+ *   - Lebih simpel dari R2 Event Notification (tidak perlu Cloudflare Worker/Queue)
+ *   - Ada jeda max 1 jam sebelum orphan dibersihkan (acceptable)
+ *   - Tidak perlu listing R2 bucket (hemat R2 API calls)
+ */
+const cleanupOrphanUploads = onSchedule(
+  {
+    schedule: "0 * * * *", // Setiap jam
+    region: "asia-southeast2",
+    timeZone: "UTC",
+    memory: "256MiB",
+    timeoutSeconds: 120,
+  },
+  async (event) => {
+    console.log("[OrphanCleanup] Starting orphan upload cleanup...");
+
+    try {
+      const now = admin.firestore.Timestamp.now();
+
+      const snapshot = await db
+        .collection("_upload_pending")
+        .where("expiresAt", "<=", now)
+        .limit(100) // Batasi per-run agar tidak timeout
+        .get();
+
+      if (snapshot.empty) {
+        console.log("[OrphanCleanup] No orphan uploads found.");
+        return;
+      }
+
+      console.log(`[OrphanCleanup] Found ${snapshot.size} expired pending upload(s).`);
+
+      let deletedFromR2 = 0;
+      let notFoundInR2 = 0;
+      let failCount = 0;
+
+      for (const doc of snapshot.docs) {
+        const { objectKey } = doc.data();
+        try {
+          // Hapus dari R2 (best-effort: jika sudah tidak ada, tetap lanjut)
+          await r2.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: objectKey }));
+          deletedFromR2++;
+          console.log(`[OrphanCleanup] ✅ R2 deleted: ${objectKey}`);
+        } catch (r2Err) {
+          // NoSuchKey berarti file memang tidak ada (user gagal upload), tetap hapus registry
+          if (r2Err.Code === "NoSuchKey" || r2Err.$metadata?.httpStatusCode === 404) {
+            notFoundInR2++;
+            console.log(`[OrphanCleanup] ⚠️ Not in R2 (already gone): ${objectKey}`);
+          } else {
+            failCount++;
+            console.error(`[OrphanCleanup] ❌ R2 delete failed for ${objectKey}:`, r2Err.message);
+          }
+        }
+
+        // Hapus registry doc (apapun hasil R2 delete)
+        await doc.ref.delete();
+      }
+
+      console.log(
+        `[OrphanCleanup] Done. R2 deleted: ${deletedFromR2}, not in R2: ${notFoundInR2}, errors: ${failCount}`
+      );
+    } catch (error) {
+      console.error("[OrphanCleanup] Critical error:", error);
+    }
+  }
+);
+
+module.exports = { scheduledAccountCleanup, cleanupOrphanUploads };
+
+

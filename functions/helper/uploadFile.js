@@ -100,10 +100,7 @@ const uploadFile = (req, folderName, fileNameFunc) => {
 };
 
 // ---------------------------------------------------------
-// HELPER: Upload File Berkas (Returns Detail Metadata) - CS was removed
-// ---------------------------------------------------------
-// ---------------------------------------------------------
-// HELPER: Upload File Berkas to Cloudflare R2 untuk nanti
+// HELPER: Upload File Berkas to Cloudflare R2 (Returns full metadata)
 // ---------------------------------------------------------
 const uploadFileBerkas = (req, folderName) => {
   return new Promise((resolve, reject) => {
@@ -165,4 +162,27 @@ const uploadFileBerkas = (req, folderName) => {
   });
 };
 
-module.exports = { uploadFile, uploadFileBerkas, formatFileSize, parseSizeStringToBytes };
+// ---------------------------------------------------------
+// HELPER: Generate Presigned PUT URL for R2
+// Allows frontend to upload directly to R2 without going through Cloud Run.
+// The presigned URL is scoped to a single objectKey and mimeType,
+// and expires after expiresInSeconds (default: 5 minutes).
+// ---------------------------------------------------------
+const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
+
+/**
+ * @param {string} objectKey       - R2 object key, e.g. "company_files/abc/uuid"
+ * @param {string} contentType     - Exact MIME type the client must PUT with
+ * @param {number} expiresInSeconds - URL lifetime in seconds (default 300 = 5 min)
+ * @returns {Promise<string>} presigned PUT URL
+ */
+const generatePresignedPutUrl = async (objectKey, contentType, expiresInSeconds = 300) => {
+  const command = new PutObjectCommand({
+    Bucket: BUCKET_NAME,
+    Key: objectKey,
+    ContentType: contentType,
+  });
+  return getSignedUrl(r2, command, { expiresIn: expiresInSeconds });
+};
+
+module.exports = { uploadFile, uploadFileBerkas, formatFileSize, parseSizeStringToBytes, generatePresignedPutUrl };

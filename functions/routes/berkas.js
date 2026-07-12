@@ -1,17 +1,58 @@
 /* eslint-disable */
 const express = require("express");
 const router = express.Router();
+const crypto = require("crypto");
 const { db } = require("../config/firebase");
 const { verifyToken } = require("../middleware/token");
 const { logCompanyActivity } = require("../helper/logCompanyActivity");
 const Busboy = require("busboy");
 const path = require("path");
-const { Timestamp } = require("firebase-admin/firestore");
-const {uploadFileBerkas,formatFileSize,parseSizeStringToBytes, } = require("../helper/uploadFile");
-const { FieldValue } = require("firebase-admin/firestore"); // Import FieldValue
-const { S3Client, DeleteObjectCommand } = require("@aws-sdk/client-s3");
+const { Timestamp, FieldValue } = require("firebase-admin/firestore");
+const { uploadFileBerkas, formatFileSize, parseSizeStringToBytes, generatePresignedPutUrl } = require("../helper/uploadFile");
+const { DeleteObjectCommand, HeadObjectCommand } = require("@aws-sdk/client-s3");
 const { r2 } = require("../config/r2");
 const BUCKET_NAME = "vorce";
+const CDN_BASE = "https://cdn.vorce.id";
+
+// MIME type whitelist — executables, scripts, etc. are intentionally excluded
+const ALLOWED_MIME_TYPES = new Set([
+  // Images
+  "image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml", "image/bmp", "image/tiff",
+  // Documents
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  // Text
+  "text/plain", "text/csv",
+  // Archives
+  "application/zip", "application/x-zip-compressed", "application/x-rar-compressed",
+  // Video
+  "video/mp4", "video/quicktime", "video/x-msvideo",
+  // Audio
+  "audio/mpeg", "audio/mp4", "audio/wav",
+]);
+
+// Internal helper: delete a R2 object, swallowing errors (best-effort cleanup)
+const deleteR2Object = async (key) => {
+  try {
+    await r2.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: key }));
+  } catch (err) {
+    console.error("[R2 Delete] Best-effort delete failed for", key, err.message);
+  }
+};
+
+// Internal helper: remove an entry from the upload pending registry
+const clearPendingRegistry = async (registryId) => {
+  try {
+    await db.collection("_upload_pending").doc(registryId).delete();
+  } catch (err) {
+    console.error("[Registry] Failed to clear pending entry", registryId, err.message);
+  }
+};
 // ---------------------------------------------------------
 // POST /upload - Upload File dengan Cek Kuota Storage
 // ---------------------------------------------------------
@@ -51,16 +92,6 @@ router.post("/upload", verifyToken, async (req, res) => {
         return res.status(400).json({ 
             message: "Penyimpanan penuh! Hapus berkas lama atau upgrade paket.",
             code: "STORAGE_FULL"
-        });
-    }
-
-    // C. Cek kuota karyawan — jika melebihi maxKaryawan, blokir upload
-    const totalEmployees = companyData.totalEmployees || 0;
-    const maxKaryawan = companyData.maxKaryawan || 3;
-    if (totalEmployees > maxKaryawan) {
-        return res.status(403).json({
-            message: `Jumlah karyawan melebihi batas (${totalEmployees}/${maxKaryawan}). Kurangi jumlah karyawan atau upgrade paket untuk mengakses fitur upload.`,
-            code: "EMPLOYEE_LIMIT_EXCEEDED"
         });
     }
 
@@ -187,16 +218,6 @@ router.post("/upload-noLogs", verifyToken, async (req, res) => {
         return res.status(400).json({ 
             message: "Penyimpanan penuh! Hapus berkas lama atau upgrade paket.",
             code: "STORAGE_FULL"
-        });
-    }
-
-    // C. Cek kuota karyawan — jika melebihi maxKaryawan, blokir upload
-    const totalEmployees = companyData.totalEmployees || 0;
-    const maxKaryawan = companyData.maxKaryawan || 3;
-    if (totalEmployees > maxKaryawan) {
-        return res.status(403).json({
-            message: `Jumlah karyawan melebihi batas (${totalEmployees}/${maxKaryawan}). Kurangi jumlah karyawan atau upgrade paket untuk mengakses fitur upload.`,
-            code: "EMPLOYEE_LIMIT_EXCEEDED"
         });
     }
 
@@ -350,75 +371,247 @@ router.get("/list", verifyToken, async (req, res) => {
 });
 
 // ---------------------------------------------------------
-// GET /total-size - Get Total Size (Default: General + Null + Undefined)
+// POST /presign - Generate Presigned URL untuk Upload Langsung ke R2
 // ---------------------------------------------------------
-router.get("/total-size", verifyToken, async (req, res) => {
+// Orphan strategy: setiap presign menulis doc ke _upload_pending/{uuid}.
+// Doc otomatis dihapus oleh /confirm-upload atau oleh scheduled cleanup
+// (cleanupOrphanUploads) yang berjalan setiap jam.
+// ---------------------------------------------------------
+router.post("/presign", verifyToken, async (req, res) => {
   try {
     const user = req.user;
-    const categoryFilter = req.query.category; // Bisa 'ALL', string lain, atau undefined
+    const { fileName, mimeType, fileSize: rawFileSize, category } = req.body;
 
+    // 1. Validasi Akses
+    if (!["admin", "staff"].includes(user.role)) {
+      return res.status(403).json({ message: "Hanya Admin & Staff yang boleh upload." });
+    }
     if (!user.idCompany) {
       return res.status(400).json({ message: "ID Company tidak valid." });
     }
-
-    let query = db
-      .collection("companies")
-      .doc(user.idCompany)
-      .collection("files");
-
-    // Optimasi select fields
-    query = query.select("size", "category");
-
-    // LOGIKA QUERY DATABASE:
-    // Hanya pasang .where jika ada kategori spesifik DAN bukan 'ALL'
-    if (categoryFilter && categoryFilter !== "ALL") {
-      query = query.where("category", "==", categoryFilter);
+    if (!fileName || !mimeType || rawFileSize == null) {
+      return res.status(400).json({ message: "fileName, mimeType, dan fileSize wajib diisi." });
     }
 
-    const snapshot = await query.get();
+    // 2. Validasi fileSize (pastikan number, bukan string dari FE)
+    const fileSize = Number(rawFileSize);
+    if (isNaN(fileSize) || fileSize <= 0) {
+      return res.status(400).json({ message: "fileSize harus berupa angka positif (bytes)." });
+    }
 
-    let totalBytes = 0;
-    let fileCount = 0;
-
-    if (snapshot.empty) {
-      return res.status(200).json({
-        message: "Total size berhasil dihitung.",
-        totalSize: "0 B",
-        totalBytes: 0,
-        fileCount: 0,
+    // 3. Validasi MIME type
+    if (!ALLOWED_MIME_TYPES.has(mimeType)) {
+      return res.status(400).json({
+        message: `Tipe file "${mimeType}" tidak diizinkan.`,
+        code: "MIME_NOT_ALLOWED"
       });
     }
 
-    snapshot.forEach((doc) => {
-      const data = doc.data();
+    // 4. Cek Kuota Storage (snapshot read — quota enforcement final ada di /confirm-upload via Transaction)
+    const companyRef = db.collection("companies").doc(user.idCompany);
+    const companyDoc = await companyRef.get();
+    if (!companyDoc.exists) return res.status(404).json({ message: "Perusahaan tidak ditemukan." });
 
-      // LOGIKA FILTER MANUAL (STRICT)
-      // Jalankan hanya jika user TIDAK minta 'ALL' DAN categoryFilter kosong (mode default)
-      if (!categoryFilter && categoryFilter !== "ALL") {
-        const isDefaultGroup = !data.category || data.category === "general";
+    const companyData = companyDoc.data();
+    const maxStorage = companyData.maxStorage || 0;
+    const usedStorage = companyData.usedStorage || 0;
 
-        // Jika bukan bagian dari default group, skip
-        if (!isDefaultGroup) return;
-      }
+    if (maxStorage === 0) {
+      return res.status(402).json({ message: "Storage 0 GB. Upgrade paket perusahaan.", code: "NO_STORAGE_QUOTA" });
+    }
+    if (usedStorage >= maxStorage) {
+      return res.status(400).json({ message: "Penyimpanan penuh! Hapus berkas lama atau upgrade paket.", code: "STORAGE_FULL" });
+    }
+    if (usedStorage + fileSize > maxStorage) {
+      return res.status(400).json({
+        message: `File terlalu besar (${formatFileSize(fileSize)}). Sisa kuota tidak mencukupi.`,
+        code: "QUOTA_EXCEEDED"
+      });
+    }
 
-      // Parse string "1.17 MB" ke bytes angka
-      const sizeInBytes = parseSizeStringToBytes(data.size);
+    // 5. Generate UUID-based Object Key (collision-proof)
+    const uuid = crypto.randomUUID();
+    const ext = path.extname(fileName).toLowerCase() || "";
+    const objectKey = `company_files/${user.idCompany}/${uuid}${ext}`;
 
-      totalBytes += sizeInBytes;
-      fileCount++;
+    // 6. Generate Presigned URL
+    const presignedUrl = await generatePresignedPutUrl(objectKey, mimeType, 300);
+
+    // 7. Write to upload registry (orphan detection)
+    const expiresAt = Timestamp.fromMillis(Date.now() + 15 * 60 * 1000); // 15 min
+    await db.collection("_upload_pending").doc(uuid).set({
+      objectKey,
+      idCompany: user.idCompany,
+      uploadedBy: user.email,
+      declaredMimeType: mimeType,
+      declaredFileSize: fileSize,
+      category: category || "general",
+      createdAt: Timestamp.now(),
+      expiresAt,
     });
 
     return res.status(200).json({
-      message: "Total size berhasil dihitung.",
-      totalSize: formatFileSize(totalBytes),
-      totalBytes: totalBytes,
-      fileCount: fileCount,
+      message: "Presigned URL berhasil dibuat. Upload dalam 5 menit, konfirmasi dalam 15 menit.",
+      uploadUrl: presignedUrl,
+      objectKey,
+      registryId: uuid,       // Kirim ke /confirm-upload
+      publicUrl: `${CDN_BASE}/${objectKey}`,
+      expiresInSeconds: 300,
     });
+
   } catch (e) {
-    console.error("Get Total Size Error:", e);
-    return res.status(500).json({ message: "Server Error" });
+    console.error("Presign Error:", e);
+    return res.status(500).json({ message: "Server Error", error: e.message });
   }
 });
+
+// ---------------------------------------------------------
+// POST /confirm-upload - Konfirmasi Upload & Simpan Metadata ke Firestore
+// Dipanggil FE SETELAH berhasil upload langsung ke R2.
+// SOURCE OF TRUTH: HeadObjectCommand ke R2 (tidak percaya metadata dari FE).
+// RACE CONDITION SAFE: Firestore Transaction untuk quota update.
+// ---------------------------------------------------------
+router.post("/confirm-upload", verifyToken, async (req, res) => {
+  try {
+    const user = req.user;
+    const { objectKey, registryId, category, withLogs } = req.body;
+    // Catatan: fileName, mimeType, fileSize TIDAK diambil dari body —
+    // semua metadata diambil dari R2 via HeadObjectCommand sebagai source of truth.
+
+    // 1. Validasi Akses
+    if (!["admin", "staff"].includes(user.role)) {
+      return res.status(403).json({ message: "Hanya Admin & Staff yang boleh upload." });
+    }
+    if (!user.idCompany) {
+      return res.status(400).json({ message: "ID Company tidak valid." });
+    }
+    if (!objectKey || !registryId) {
+      return res.status(400).json({ message: "objectKey dan registryId wajib diisi." });
+    }
+
+    // 2. Validasi prefix objectKey (cegah user menyalahgunakan objectKey company lain)
+    const expectedPrefix = `company_files/${user.idCompany}/`;
+    if (!objectKey.startsWith(expectedPrefix)) {
+      return res.status(403).json({ message: "objectKey tidak valid untuk perusahaan ini." });
+    }
+
+    // 3. Verifikasi registry — pastikan presign memang dibuat oleh user ini
+    const registryRef = db.collection("_upload_pending").doc(registryId);
+    const registryDoc = await registryRef.get();
+    if (!registryDoc.exists) {
+      return res.status(404).json({ message: "Registry tidak ditemukan atau sudah expired/dikonfirmasi.", code: "REGISTRY_NOT_FOUND" });
+    }
+    const registry = registryDoc.data();
+    if (registry.uploadedBy !== user.email || registry.objectKey !== objectKey) {
+      return res.status(403).json({ message: "Registry tidak cocok dengan user atau objectKey ini." });
+    }
+
+    // 4. HeadObjectCommand — verifikasi file benar-benar ada di R2
+    //    Sekaligus ambil ContentLength & ContentType sebagai source of truth
+    let realContentLength, realContentType;
+    try {
+      const headResult = await r2.send(new HeadObjectCommand({ Bucket: BUCKET_NAME, Key: objectKey }));
+      realContentLength = headResult.ContentLength;   // bytes, dari R2
+      realContentType   = headResult.ContentType;     // MIME, dari R2
+    } catch (headErr) {
+      // File belum/gagal upload ke R2
+      return res.status(422).json({
+        message: "File tidak ditemukan di storage. Pastikan upload ke R2 berhasil sebelum konfirmasi.",
+        code: "FILE_NOT_IN_STORAGE"
+      });
+    }
+
+    // 5. Validasi ulang ContentType dari R2 terhadap whitelist
+    if (!ALLOWED_MIME_TYPES.has(realContentType)) {
+      // File sudah terlanjur ada di R2 dengan type aneh — hapus dan tolak
+      await deleteR2Object(objectKey);
+      await clearPendingRegistry(registryId);
+      return res.status(400).json({
+        message: `Tipe file "${realContentType}" tidak diizinkan. File telah dihapus dari storage.`,
+        code: "MIME_NOT_ALLOWED"
+      });
+    }
+
+    // 6. Atomic quota check + metadata write via Firestore Transaction
+    //    (mencegah race condition concurrent upload)
+    const companyRef = db.collection("companies").doc(user.idCompany);
+    let newDocRef;
+
+    await db.runTransaction(async (t) => {
+      const companySnap = await t.get(companyRef);
+      if (!companySnap.exists) throw new Error("COMPANY_NOT_FOUND");
+
+      const { maxStorage = 0, usedStorage = 0 } = companySnap.data();
+
+      if (usedStorage + realContentLength > maxStorage) {
+        throw new Error("QUOTA_EXCEEDED");
+      }
+
+      // Buat ref baru untuk file doc
+      newDocRef = companyRef.collection("files").doc();
+
+      const newFileDoc = {
+        fileName: registry.objectKey.split("/").pop(), // nama dari objectKey (uuid.ext)
+        storagePath: objectKey,
+        downloadUrl: `${CDN_BASE}/${objectKey}`,
+        mimeType: realContentType,             // dari R2, bukan FE
+        size: formatFileSize(realContentLength), // dari R2, bukan FE
+        sizeBytes: realContentLength,          // dari R2, bukan FE
+        category: category || registry.category || "general",
+        uploadedBy: user.email,
+        uploaderName: user.nama || "User",
+        uploaderRole: user.role,
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+        updatedBy: null,
+      };
+
+      t.set(newDocRef, newFileDoc);
+      t.update(companyRef, { usedStorage: FieldValue.increment(realContentLength) });
+    });
+
+    // 7. Hapus entry registry (tidak perlu atomic — cleanup jika gagal ditangani scheduler)
+    await clearPendingRegistry(registryId);
+
+    // 8. Log aktivitas
+    if (withLogs !== false) {
+      await logCompanyActivity(user.idCompany, {
+        actorEmail: user.email,
+        actorName: user.nama || "User",
+        target: newDocRef.id,
+        action: "UPLOAD_FILE",
+        description: `Upload berkas (${category || registry.category || "general"}): ${formatFileSize(realContentLength)} — ${realContentType}`,
+      });
+    }
+
+    return res.status(201).json({
+      message: "Berkas berhasil dikonfirmasi dan disimpan.",
+      data: {
+        id: newDocRef.id,
+        objectKey,
+        downloadUrl: `${CDN_BASE}/${objectKey}`,
+        mimeType: realContentType,
+        size: formatFileSize(realContentLength),
+        sizeBytes: realContentLength,
+        category: category || registry.category || "general",
+      },
+    });
+
+  } catch (e) {
+    if (e.message === "QUOTA_EXCEEDED") {
+      // Rollback: hapus file yg sudah terlanjur ada di R2 (opsional, tapi fair)
+      if (req.body?.objectKey) await deleteR2Object(req.body.objectKey);
+      if (req.body?.registryId) await clearPendingRegistry(req.body.registryId);
+      return res.status(400).json({ message: "Kuota storage tidak cukup. File dihapus dari storage.", code: "QUOTA_EXCEEDED" });
+    }
+    if (e.message === "COMPANY_NOT_FOUND") {
+      return res.status(404).json({ message: "Perusahaan tidak ditemukan." });
+    }
+    console.error("Confirm Upload Error:", e);
+    return res.status(500).json({ message: "Server Error", error: e.message });
+  }
+});
+
 // ---------------------------------------------------------
 // EDIT NAMA BERKAS (Admin / Pemilik File)
 // ---------------------------------------------------------

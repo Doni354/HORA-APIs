@@ -2,17 +2,44 @@
 const express = require("express");
 const admin = require("firebase-admin");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
+const pathModule = require("path");
 const { db } = require("../config/firebase");
 const { verifyToken } = require("../middleware/token");
-const { uploadFile } = require("../helper/uploadFile");
-const { DeleteObjectCommand } = require("@aws-sdk/client-s3");
+const { uploadFile, generatePresignedPutUrl } = require("../helper/uploadFile");
+const { DeleteObjectCommand, HeadObjectCommand } = require("@aws-sdk/client-s3");
 const { r2 } = require("../config/r2");
 const BUCKET_NAME = "vorce";
+const CDN_BASE = "https://cdn.vorce.id";
 const router = express.Router();
 const { Timestamp } = require("firebase-admin/firestore");
 const { logCompanyActivity } = require("../helper/logCompanyActivity");
 const { checkPhoneUnique } = require("../helper/phoneValidator");
 const EmailTemplates = require("../helper/emailHelper");
+
+// Whitelist MIME untuk foto profil dan logo (image only)
+const ALLOWED_IMAGE_MIME_TYPES = new Set([
+  "image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp",
+]);
+
+// Shared helper: hapus file lama dari R2 berdasarkan URL publik (best-effort, non-fatal)
+const deleteOldFileFromR2 = async (oldUrl) => {
+  if (!oldUrl) return;
+  const isOurCdn    = oldUrl.includes("cdn.vorce.id");
+  const isFirebase  = oldUrl.includes("storage.googleapis.com");
+  if (!isOurCdn && !isFirebase) return;
+
+  try {
+    const filePath = isFirebase
+      ? oldUrl.split(/hora-7394b\.firebasestorage\.app\/|vorce\//)[1]
+      : oldUrl.split(`${CDN_BASE}/`)[1];
+    if (filePath) {
+      await r2.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: decodeURIComponent(filePath) }));
+    }
+  } catch (err) {
+    console.error("[R2 Delete Old] Non-fatal error:", err.message);
+  }
+};
 // =========================================================
 // EMPLOYEE MANAGEMENT
 // =========================================================
@@ -470,6 +497,190 @@ router.post("/upload-avatar", verifyToken, async (req, res) => {
   }
 });
 
+
+// ---------------------------------------------------------
+// 4. [NEW] PRESIGNED URL - Upload Avatar Langsung ke R2
+// ---------------------------------------------------------
+router.post("/upload-avatar-presign", verifyToken, async (req, res) => {
+  try {
+    const uid = req.user.uid || req.user.email;
+    const { fileName, mimeType } = req.body;
+
+    if (!fileName || !mimeType) {
+      return res.status(400).json({ message: "fileName dan mimeType wajib diisi." });
+    }
+    if (!ALLOWED_IMAGE_MIME_TYPES.has(mimeType)) {
+      return res.status(400).json({ message: `Tipe "${mimeType}" tidak diizinkan untuk foto profil.`, code: "MIME_NOT_ALLOWED" });
+    }
+
+    const ext = pathModule.extname(fileName).toLowerCase() || ".jpg";
+    const uuid = crypto.randomUUID();
+    const objectKey = `user_profiles/${uuid}${ext}`;
+    const presignedUrl = await generatePresignedPutUrl(objectKey, mimeType, 300);
+
+    return res.status(200).json({
+      uploadUrl: presignedUrl,
+      objectKey,
+      publicUrl: `${CDN_BASE}/${objectKey}`,
+      expiresInSeconds: 300,
+    });
+  } catch (e) {
+    console.error("Avatar Presign Error:", e);
+    return res.status(500).json({ message: "Server Error", error: e.message });
+  }
+});
+
+// ---------------------------------------------------------
+// 4b. CONFIRM Avatar Upload - Verifikasi R2 + Update Firestore + Hapus Foto Lama
+// ---------------------------------------------------------
+router.post("/upload-avatar-confirm", verifyToken, async (req, res) => {
+  try {
+    const email = req.user.email;
+    const { objectKey } = req.body;
+
+    if (!objectKey) {
+      return res.status(400).json({ message: "objectKey wajib diisi." });
+    }
+    // Validasi prefix
+    if (!objectKey.startsWith("user_profiles/")) {
+      return res.status(403).json({ message: "objectKey tidak valid untuk avatar." });
+    }
+
+    // Verifikasi file ada di R2
+    let realContentType, realContentLength;
+    try {
+      const head = await r2.send(new HeadObjectCommand({ Bucket: BUCKET_NAME, Key: objectKey }));
+      realContentType   = head.ContentType;
+      realContentLength = head.ContentLength;
+    } catch {
+      return res.status(422).json({ message: "File tidak ditemukan di storage. Upload ke R2 terlebih dahulu.", code: "FILE_NOT_IN_STORAGE" });
+    }
+
+    // Validasi type & size dari R2
+    if (!ALLOWED_IMAGE_MIME_TYPES.has(realContentType)) {
+      await r2.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: objectKey })).catch(() => {});
+      return res.status(400).json({ message: `Tipe file tidak diizinkan: ${realContentType}`, code: "MIME_NOT_ALLOWED" });
+    }
+
+    // Ambil URL lama dan update Firestore
+    const userRef = db.collection("users").doc(email);
+    const userDoc = await userRef.get();
+    const oldPhotoUrl = userDoc.exists ? userDoc.data().photoURL : null;
+
+    await userRef.update({ photoURL: `${CDN_BASE}/${objectKey}` });
+
+    // Hapus foto lama dari R2 (best-effort, setelah Firestore update berhasil)
+    await deleteOldFileFromR2(oldPhotoUrl);
+
+    return res.status(200).json({
+      message: "Foto profil berhasil diperbarui.",
+      photoURL: `${CDN_BASE}/${objectKey}`,
+    });
+  } catch (e) {
+    console.error("Avatar Confirm Error:", e);
+    return res.status(500).json({ message: "Server Error", error: e.message });
+  }
+});
+
+// ---------------------------------------------------------
+// 5. [NEW] PRESIGNED URL - Upload Logo Perusahaan Langsung ke R2
+// ---------------------------------------------------------
+router.post("/company-logo-presign", verifyToken, async (req, res) => {
+  try {
+    const user = req.user;
+    if (user.role !== "admin") {
+      return res.status(403).json({ message: "Hanya Admin yang boleh mengubah logo." });
+    }
+    if (!user.idCompany) {
+      return res.status(400).json({ message: "ID Company tidak valid." });
+    }
+
+    const { fileName, mimeType } = req.body;
+    if (!fileName || !mimeType) {
+      return res.status(400).json({ message: "fileName dan mimeType wajib diisi." });
+    }
+    if (!ALLOWED_IMAGE_MIME_TYPES.has(mimeType)) {
+      return res.status(400).json({ message: `Tipe "${mimeType}" tidak diizinkan untuk logo.`, code: "MIME_NOT_ALLOWED" });
+    }
+
+    const ext = pathModule.extname(fileName).toLowerCase() || ".png";
+    const uuid = crypto.randomUUID();
+    const objectKey = `company_logos/${user.idCompany}/${uuid}${ext}`;
+    const presignedUrl = await generatePresignedPutUrl(objectKey, mimeType, 300);
+
+    return res.status(200).json({
+      uploadUrl: presignedUrl,
+      objectKey,
+      publicUrl: `${CDN_BASE}/${objectKey}`,
+      expiresInSeconds: 300,
+    });
+  } catch (e) {
+    console.error("Logo Presign Error:", e);
+    return res.status(500).json({ message: "Server Error", error: e.message });
+  }
+});
+
+// ---------------------------------------------------------
+// 5b. CONFIRM Logo Upload - Verifikasi R2 + Update Firestore + Hapus Logo Lama
+// ---------------------------------------------------------
+router.post("/company-logo-confirm", verifyToken, async (req, res) => {
+  try {
+    const user = req.user;
+    if (user.role !== "admin") {
+      return res.status(403).json({ message: "Hanya Admin yang boleh mengubah logo." });
+    }
+    if (!user.idCompany) {
+      return res.status(400).json({ message: "ID Company tidak valid." });
+    }
+
+    const { objectKey } = req.body;
+    if (!objectKey) {
+      return res.status(400).json({ message: "objectKey wajib diisi." });
+    }
+    // Validasi prefix — pastikan hanya untuk company milik user ini
+    if (!objectKey.startsWith(`company_logos/${user.idCompany}/`)) {
+      return res.status(403).json({ message: "objectKey tidak valid untuk perusahaan ini." });
+    }
+
+    // Verifikasi file ada di R2
+    let realContentType, realContentLength;
+    try {
+      const head = await r2.send(new HeadObjectCommand({ Bucket: BUCKET_NAME, Key: objectKey }));
+      realContentType   = head.ContentType;
+      realContentLength = head.ContentLength;
+    } catch {
+      return res.status(422).json({ message: "File tidak ditemukan di storage. Upload ke R2 terlebih dahulu.", code: "FILE_NOT_IN_STORAGE" });
+    }
+
+    if (!ALLOWED_IMAGE_MIME_TYPES.has(realContentType)) {
+      await r2.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: objectKey })).catch(() => {});
+      return res.status(400).json({ message: `Tipe file tidak diizinkan: ${realContentType}`, code: "MIME_NOT_ALLOWED" });
+    }
+
+    const companyRef = db.collection("companies").doc(user.idCompany);
+    const companyDoc = await companyRef.get();
+    const oldLogoUrl = companyDoc.exists ? companyDoc.data().logoUrl : null;
+
+    await companyRef.update({ logoUrl: `${CDN_BASE}/${objectKey}` });
+    await deleteOldFileFromR2(oldLogoUrl);
+
+    await logCompanyActivity(user.idCompany, {
+      actorEmail: user.email,
+      actorName: user.nama || "Admin",
+      target: user.idCompany,
+      action: "UPDATE_LOGO",
+      description: `Admin ${user.nama || "Admin"} memperbarui logo perusahaan.`,
+    });
+
+    return res.status(200).json({
+      message: "Logo perusahaan berhasil diperbarui.",
+      logoPerusahaan: `${CDN_BASE}/${objectKey}`,
+    });
+  } catch (e) {
+    console.error("Logo Confirm Error:", e);
+    return res.status(500).json({ message: "Server Error", error: e.message });
+  }
+});
 
 // =========================================================
 // USER PROFILE Optional

@@ -18,7 +18,8 @@ const tugasRoutes = require("./routes/tugas");
 const reimburseRoutes = require("./routes/reimburse");
 const subscriptionRoutes = require("./routes/subscription");
 const FCM = require("./FCM/fcm");
-const { scheduledAccountCleanup } = require("./scheduler/scheduler");
+const { scheduledAccountCleanup, cleanupOrphanUploads } = require("./scheduler/scheduler");
+
 const { notifRTDN } = require("./scheduler/rtdn");
 // ---------------------------------------------------------
 // FCM
@@ -30,6 +31,12 @@ exports.notifFCM = FCM.notifFCM;
 // SCHEDULER: Auto-delete expired accounts (daily 02:00 WIB)
 // ---------------------------------------------------------
 exports.scheduledAccountCleanup = scheduledAccountCleanup;
+
+// ---------------------------------------------------------
+// SCHEDULER: Cleanup orphan R2 uploads (hourly)
+// ---------------------------------------------------------
+exports.cleanupOrphanUploads = cleanupOrphanUploads;
+
 
 // ---------------------------------------------------------
 // PUB/SUB: Google Play RTDN (Real-time Developer Notifications)
