@@ -701,7 +701,6 @@ router.post("/registrasi", async (req, res) => {
         alamatLoc,
         totalLike: 0,
         // --- BATASAN SISTEM (FREE TIER) ---
-        maxKaryawan: 3, // Default: 3 Orang (base limit)
         maxStorage: 104857600, // Default: 100 MB in bytes (base limit)
         usedStorage: 0, // Terpakai: 0 Bytes
         totalEmployees: 0, // Sync: 0 karyawan (owner tidak dihitung)
@@ -751,7 +750,6 @@ router.post("/registrasi", async (req, res) => {
       data: {
         companyCode: idCompany,
         companyName: namaPerusahaan,
-        maxKaryawan: 3,
         maxStorage: 104857600, // 100 MB
       },
     });

@@ -251,10 +251,8 @@ function isActiveState(status) {
  * FORMULA (REVISED):
  *   Jika ada tier plan aktif → tier plan MENGGANTIKAN free tier:
  *     maxStorage  = tierPlan.addedStorage + Σ(addon.addedStorage)
- *     maxKaryawan = tierPlan.addedKaryawan
  *   Jika TIDAK ada tier plan (free):
  *     maxStorage  = BASE (100MB) + Σ(addon.addedStorage)
- *     maxKaryawan = BASE (3)
  *
  * Fungsi ini IDEMPOTENT — bisa dipanggil berulang kali tanpa efek samping.
  *
@@ -283,7 +281,6 @@ async function recalculateLimits(companyId) {
       // Tier plan: ambil yang tertinggi jika ada multiple (seharusnya cuma 1)
       if (!hasTierPlan || data.addedStorage > tierStorage) {
         tierStorage = data.addedStorage || 0;
-        tierKaryawan = data.addedKaryawan || 0;
       }
       hasTierPlan = true;
     } else if (data.productType === "velinked") {
@@ -303,9 +300,6 @@ async function recalculateLimits(companyId) {
   const finalStorage = hasTierPlan
     ? tierStorage + addonStorage              // Tier REPLACES free tier
     : BASE_MAX_STORAGE + addonStorage;        // Free tier + addons
-  const finalKaryawan = hasTierPlan
-    ? tierKaryawan                            // Tier's max karyawan
-    : BASE_MAX_KARYAWAN;                      // Free tier default
   const finalMaxDevices = hasVelinkedPlan
     ? velinkedMaxDevices                      // Velinked plan's max devices
     : BASE_MAX_DEVICES;                       // Default: 0 (fitur premium)
@@ -316,14 +310,13 @@ async function recalculateLimits(companyId) {
     .doc(companyId)
     .update({
       maxStorage: finalStorage,
-      maxKaryawan: finalKaryawan,
       max_devices: finalMaxDevices,
     });
 
   console.log(
     `[Subscription] Recalculated limits for ${companyId}: ` +
       `maxStorage=${finalStorage} (tier=${hasTierPlan}), ` +
-      `maxKaryawan=${finalKaryawan}, addonStorage=${addonStorage}, ` +
+      `addonStorage=${addonStorage}, ` +
       `max_devices=${finalMaxDevices} (velinked=${hasVelinkedPlan})`
   );
 }
@@ -642,17 +635,14 @@ router.get("/status", verifyToken, async (req, res) => {
       // Hitung total addon dari subscription yang masih aktif
       if (isActiveState(data.status)) {
         totalAddedStorage += data.addedStorage || 0;
-        totalAddedKaryawan += data.addedKaryawan || 0;
       }
     });
 
     return res.status(200).json({
       subscriptions,
       totalAddedStorage,
-      totalAddedKaryawan,
       baseLimits: {
         maxStorage: BASE_MAX_STORAGE,
-        maxKaryawan: BASE_MAX_KARYAWAN,
       },
     });
   } catch (e) {

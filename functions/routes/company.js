@@ -23,16 +23,14 @@ const getAuthProvider = (decodedToken) => {
 };
 
 /**
- * HELPER: Pengecekan Kuota Karyawan (Admin + Staff)
- * Digunakan di: verify-employee & accept-invite
+ * HELPER: Sync Jumlah Karyawan (Admin + Staff)
+ * (Sekarang hanya untuk menghitung dan sync totalEmployees tanpa membatasi pendaftaran)
  */
 async function checkCompanyQuota(idCompany) {
   const companyDoc = await db.collection("companies").doc(idCompany).get();
   if (!companyDoc.exists) return { allowed: false, message: "Perusahaan tidak ditemukan" };
   
   const companyData = companyDoc.data();
-  // Default limit 10 jika field maxKaryawan belum ada di DB
-  const maxQuota = companyData.maxKaryawan || 10; 
   const ownerEmail = companyData.createdBy; // Owner tidak dihitung sebagai karyawan
 
   const employeesSnapshot = await db.collection("users")
@@ -52,13 +50,6 @@ async function checkCompanyQuota(idCompany) {
   await db.collection("companies").doc(idCompany).update({
     totalEmployees: currentCount,
   });
-
-  if (currentCount >= maxQuota) {
-    return { 
-      allowed: false, 
-      message: `Kuota karyawan penuh (${currentCount}/${maxQuota}). Silakan hubungi pusat untuk upgrade.` 
-    };
-  }
 
   return { allowed: true, currentCount };
 }
@@ -524,9 +515,7 @@ router.get("/list", verifyToken, async (req, res) => {
       .orderBy("createdAt", "desc")
       .get();
 
-    // --- AMBIL INFO KUOTA & STORAGE UNTUK FRONTEND ---
-    // PENTING: Deklarasi variable DI LUAR if, supaya scope-nya global di fungsi ini
-    let maxKaryawan = 10;
+    // --- AMBIL INFO STORAGE UNTUK FRONTEND ---
     let maxStorage = 0;
     let usedStorage = 0;
 
@@ -534,8 +523,6 @@ router.get("/list", verifyToken, async (req, res) => {
     
     if (companyDoc.exists) {
         const cData = companyDoc.data();
-        // Gunakan operator || untuk handling data lama yang kosong (undefined)
-        maxKaryawan = cData.maxKaryawan || 10;
         maxStorage = cData.maxStorage || 0;
         usedStorage = cData.usedStorage || 0;
     }
@@ -544,11 +531,9 @@ router.get("/list", verifyToken, async (req, res) => {
     if (snapshot.empty) {
       return res.status(200).json({
         message: "Belum ada pegawai lain.",
-        maxQuota: maxKaryawan,
         storage: {
             used: usedStorage,
             max: maxStorage,
-            // LOGIC FIX: Hapus "&& maxStorage > 0" agar jika 0/0 dianggap penuh (true)
             isFull: usedStorage >= maxStorage 
         },
         data: [],
@@ -575,12 +560,10 @@ router.get("/list", verifyToken, async (req, res) => {
       message: "Data pegawai berhasil diambil",
       requestor: myEmail,
       total: allUsers.length,
-      maxQuota: maxKaryawan,
       deviceLockEnabled: companyDoc.exists ? (companyDoc.data().deviceLockEnabled || false) : false,
       storage: {
         used: usedStorage,
         max: maxStorage,
-        // LOGIC FIX: Hapus "&& maxStorage > 0"
         isFull: usedStorage >= maxStorage
       },
       data: allUsers,

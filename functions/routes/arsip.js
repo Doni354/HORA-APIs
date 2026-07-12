@@ -1158,14 +1158,13 @@ router.post("/upgrade-resource", async (req, res) => {
     }
 
     // B. Parse Data
-    const { idCompany, maxStorage, maxKaryawan } = req.body;
+    const { idCompany, maxStorage } = req.body;
 
     if (!idCompany)
       return res.status(400).json({ message: "ID Company required" });
 
     const updates = {};
     if (maxStorage !== undefined) updates.maxStorage = parseInt(maxStorage); // Pastikan angka (Bytes)
-    if (maxKaryawan !== undefined) updates.maxKaryawan = parseInt(maxKaryawan); // Pastikan angka
 
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ message: "No data to update" });
@@ -1182,7 +1181,7 @@ router.post("/upgrade-resource", async (req, res) => {
       action: "UPGRADE_RESOURCE",
       description: `Upgrade Resource via API. Storage: ${
         maxStorage || "-"
-      }, Karyawan: ${maxKaryawan || "-"}`,
+      }`,
     });
 
     // E. Kirim Notifikasi Email ke Owner
@@ -1198,9 +1197,6 @@ router.post("/upgrade-resource", async (req, res) => {
           companyName: compData.namaPerusahaan,
           maxStorageDisplay: maxStorage
             ? (maxStorage / 1024 / 1024).toFixed(0) + " MB"
-            : "Tidak Berubah",
-          maxKaryawanDisplay: maxKaryawan
-            ? maxKaryawan + " Orang"
             : "Tidak Berubah",
         });
       }

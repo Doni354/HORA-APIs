@@ -166,7 +166,6 @@ class EmailTemplates {
                     <div style="background: #f3f4f6; padding: 20px; border-radius: 8px; margin: 25px 0;">
                         <ul style="margin: 0; padding-left: 20px; line-height: 2;">
                             <li><b>Max Storage:</b> ${data.maxStorageDisplay || "Tidak Berubah"}</li>
-                            <li><b>Max Karyawan:</b> ${data.maxKaryawanDisplay || "Tidak Berubah"}</li>
                         </ul>
                     </div>
                     <p>Selamat menikmati layanan Vorce dengan kapasitas lebih besar.</p>

@@ -54,7 +54,6 @@ const { db } = require("../config/firebase");
 const {
   verifySubscription,
   BASE_MAX_STORAGE,
-  BASE_MAX_KARYAWAN,
   BASE_MAX_DEVICES,
 } = require("../helper/playstore");
 
@@ -96,11 +95,9 @@ async function recalculateLimits(companyId) {
   let hasVelinkedPlan = false;
 
   activeSubs.forEach((doc) => {
-    const data = doc.data();
     if (data.productType === "tier") {
       if (!hasTierPlan || data.addedStorage > tierStorage) {
         tierStorage = data.addedStorage || 0;
-        tierKaryawan = data.addedKaryawan || 0;
       }
       hasTierPlan = true;
     } else if (data.productType === "velinked") {
@@ -118,9 +115,6 @@ async function recalculateLimits(companyId) {
   const finalStorage = hasTierPlan
     ? tierStorage + addonStorage
     : BASE_MAX_STORAGE + addonStorage;
-  const finalKaryawan = hasTierPlan
-    ? tierKaryawan
-    : BASE_MAX_KARYAWAN;
   const finalMaxDevices = hasVelinkedPlan
     ? velinkedMaxDevices
     : BASE_MAX_DEVICES;
@@ -130,14 +124,13 @@ async function recalculateLimits(companyId) {
     .doc(companyId)
     .update({
       maxStorage: finalStorage,
-      maxKaryawan: finalKaryawan,
       max_devices: finalMaxDevices,
     });
 
   console.log(
     `[RTDN] Recalculated limits for ${companyId}: ` +
       `maxStorage=${finalStorage} (tier=${hasTierPlan}), ` +
-      `maxKaryawan=${finalKaryawan}, addonStorage=${addonStorage}, ` +
+      `addonStorage=${addonStorage}, ` +
       `max_devices=${finalMaxDevices} (velinked=${hasVelinkedPlan})`
   );
 }
