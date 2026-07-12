@@ -2,6 +2,7 @@
 const express = require("express")
 const { Timestamp } = require("firebase-admin/firestore")
 const { db } = require("../config/firebase")
+const { verifyToken } = require("../middleware/token")
 const { resolveUserShift, calculateLateness, ShiftScheduleError } = require("../helper/shiftScheduleService")
 
 const router = express.Router()
@@ -30,8 +31,9 @@ const getFileUrlById = async (idPerusahaan, idBerkas) => {
 
 // ---------------------------------------------------------
 // GET /absensi/HomeA - View Absensi Data (Per Company)
+// Membutuhkan Bearer token - gunakan Firebase SDK atau API ini dengan auth
 // ---------------------------------------------------------
-router.get("/HomeA", async (req, res) => {
+router.get("/HomeA", verifyToken, async (req, res) => {
   try {
     const idPerusahaan = req.query.IDPerusahaan || req.query.idperusahaan
     const tglstart = req.query.tglstart
@@ -99,7 +101,7 @@ router.get("/HomeA", async (req, res) => {
 // ---------------------------------------------------------
 // GET /absensi/indie - Individual View Absensi
 // ---------------------------------------------------------
-router.get("/indie", async (req, res) => {
+router.get("/indie", verifyToken, async (req, res) => {
   try {
     const idkaryawan = req.query.idkaryawan
     // PERUBAHAN: Wajib ada idPerusahaan karena skrg sub-collection
