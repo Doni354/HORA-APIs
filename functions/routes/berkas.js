@@ -53,6 +53,37 @@ const clearPendingRegistry = async (registryId) => {
     console.error("[Registry] Failed to clear pending entry", registryId, err.message);
   }
 };
+// Internal helper: get storage padding multiplier from settings
+let cachedMultiplier = null;
+let lastMultiplierCacheTime = 0;
+const MULTIPLIER_CACHE_TTL = 5 * 60 * 1000; // 5 menit
+
+const getStorageMultiplier = async () => {
+  try {
+    const now = Date.now();
+    // Return cached value jika TTL belum habis (agar API tetap cepat)
+    if (cachedMultiplier !== null && (now - lastMultiplierCacheTime < MULTIPLIER_CACHE_TTL)) {
+       return cachedMultiplier;
+    }
+
+    const docSnap = await db.collection("server_settings").doc("global").get();
+    if (docSnap.exists) {
+      const pct = docSnap.data().storagePaddingPercentage;
+      if (pct !== undefined) {
+          cachedMultiplier = 1 + (Number(pct) / 100);
+          lastMultiplierCacheTime = now;
+          return cachedMultiplier;
+      }
+    }
+  } catch (err) {
+    console.error("[Settings] Failed to fetch storage padding", err.message);
+  }
+  
+  // Default padding fallback 10% jika gagal/belum disetting
+  cachedMultiplier = 1.1;
+  lastMultiplierCacheTime = Date.now();
+  return cachedMultiplier;
+};
 // ---------------------------------------------------------
 // POST /upload - Upload File dengan Cek Kuota Storage
 // ---------------------------------------------------------
@@ -100,7 +131,8 @@ router.post("/upload", verifyToken, async (req, res) => {
     let result;
     
     try {
-        result = await uploadFileBerkas(req, folderPath);
+        const multiplier = await getStorageMultiplier();
+        result = await uploadFileBerkas(req, folderPath, multiplier);
     } catch (uploadError) {
         return res.status(500).json({ message: "Gagal upload ke server.", error: uploadError.message });
     }
@@ -226,7 +258,8 @@ router.post("/upload-noLogs", verifyToken, async (req, res) => {
     let result;
     
     try {
-        result = await uploadFileBerkas(req, folderPath);
+        const multiplier = await getStorageMultiplier();
+        result = await uploadFileBerkas(req, folderPath, multiplier);
     } catch (uploadError) {
         return res.status(500).json({ message: "Gagal upload ke server.", error: uploadError.message });
     }
@@ -394,10 +427,12 @@ router.post("/presign", verifyToken, async (req, res) => {
     }
 
     // 2. Validasi fileSize (pastikan number, bukan string dari FE)
-    const fileSize = Number(rawFileSize);
-    if (isNaN(fileSize) || fileSize <= 0) {
+    const actualFileSize = Number(rawFileSize);
+    if (isNaN(actualFileSize) || actualFileSize <= 0) {
       return res.status(400).json({ message: "fileSize harus berupa angka positif (bytes)." });
     }
+    const multiplier = await getStorageMultiplier();
+    const fileSize = Math.ceil(actualFileSize * multiplier); // Add padding as requested
 
     // 3. Validasi MIME type
     if (!ALLOWED_MIME_TYPES.has(mimeType)) {
@@ -510,8 +545,9 @@ router.post("/confirm-upload", verifyToken, async (req, res) => {
     //    Sekaligus ambil ContentLength & ContentType sebagai source of truth
     let realContentLength, realContentType;
     try {
+      const multiplier = await getStorageMultiplier();
       const headResult = await r2.send(new HeadObjectCommand({ Bucket: BUCKET_NAME, Key: objectKey }));
-      realContentLength = headResult.ContentLength;   // bytes, dari R2
+      realContentLength = Math.ceil(headResult.ContentLength * multiplier);   // bytes, dari R2 (+ padding)
       realContentType   = headResult.ContentType;     // MIME, dari R2
     } catch (headErr) {
       // File belum/gagal upload ke R2

@@ -102,7 +102,7 @@ const uploadFile = (req, folderName, fileNameFunc) => {
 // ---------------------------------------------------------
 // HELPER: Upload File Berkas to Cloudflare R2 (Returns full metadata)
 // ---------------------------------------------------------
-const uploadFileBerkas = (req, folderName) => {
+const uploadFileBerkas = (req, folderName, multiplier = 1.1) => {
   return new Promise((resolve, reject) => {
     const busboy = Busboy({ headers: req.headers });
     let fileBuffer = null;
@@ -139,7 +139,7 @@ const uploadFileBerkas = (req, folderName) => {
 
         const publicUrl = `https://cdn.vorce.id/${objectKey}`;
         
-        const sizeBytes = fileBuffer.length;
+        const sizeBytes = Math.ceil(fileBuffer.length * multiplier);
 
         resolve({
           publicUrl,
