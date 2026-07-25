@@ -14,8 +14,11 @@ class ShiftScheduleError extends Error {
 
 // =============================================================
 // resolveUserShift
-// Cari schedule aktif untuk user pada tanggal tertentu,
-// lalu ambil master shift data dari collection shifts.
+// Cari schedule aktif untuk user pada tanggal tertentu.
+// Mendukung dua mode:
+//   1. Master Shift  — schedule.shiftId ada → fetch dari collection "shifts"
+//   2. Inline Shift  — schedule.shiftId null → pakai startTime/endTime langsung
+//                      dari dokumen schedule (tidak perlu buat master shift dulu)
 // =============================================================
 /**
  * @param {string} companyId  - ID perusahaan
@@ -26,7 +29,7 @@ class ShiftScheduleError extends Error {
  */
 async function resolveUserShift(companyId, userId, targetDate, zone = "Asia/Jakarta") {
   // 1. Hitung day-of-week di timezone yang diminta
-  //    0 = Minggu, 1 = Senin, … 6 = Sabtu  (sesuai getDay())
+  //    0 = Minggu, 1 = Senin, ... 6 = Sabtu  (sesuai getDay())
   const localDateStr = targetDate.toLocaleDateString("en-CA", { timeZone: zone }); // "YYYY-MM-DD"
   const localDate = new Date(localDateStr + "T00:00:00"); // midnight lokal sebagai Date
   const dayOfWeek = localDate.getDay(); // 0-6
@@ -58,7 +61,7 @@ async function resolveUserShift(companyId, userId, targetDate, zone = "Asia/Jaka
     // b) Hari ini ada di days?
     if (!Array.isArray(data.days) || !data.days.includes(dayOfWeek)) return;
 
-    // c) Tanggal dalam rentang startDate – endDate?
+    // c) Tanggal dalam rentang startDate - endDate?
     const start = data.startDate?.toDate ? data.startDate.toDate() : new Date(data.startDate);
     const end = data.endDate?.toDate ? data.endDate.toDate() : new Date(data.endDate);
 
@@ -93,29 +96,48 @@ async function resolveUserShift(companyId, userId, targetDate, zone = "Asia/Jaka
 
   const schedule = matchingSchedules[0];
 
-  // 5. Fetch master shift document
-  if (!schedule.shiftId) {
-    throw new ShiftScheduleError(
-      "SHIFT_NOT_FOUND",
-      "Schedule tidak memiliki referensi shift (shiftId kosong)."
-    );
+  // 5. Resolve shift data — dua mode didukung:
+  //    MODE A (Master Shift): schedule.shiftId ada → fetch dokumen dari collection "shifts"
+  //    MODE B (Inline Shift): schedule.shiftId null → ambil startTime/endTime langsung dari schedule
+  let shift;
+
+  if (schedule.shiftId) {
+    // ── Mode A: Master Shift ──
+    const shiftDoc = await db
+      .collection("companies")
+      .doc(companyId)
+      .collection("shifts")
+      .doc(schedule.shiftId)
+      .get();
+
+    if (!shiftDoc.exists) {
+      throw new ShiftScheduleError(
+        "SHIFT_NOT_FOUND",
+        `Data master shift '${schedule.shiftId}' tidak ditemukan. Hubungi admin.`
+      );
+    }
+
+    shift = { id: shiftDoc.id, ...shiftDoc.data() };
+  } else {
+    // ── Mode B: Inline Shift ──
+    // Data jam langsung dari schedule, tidak perlu master shift
+    if (!schedule.startTime) {
+      throw new ShiftScheduleError(
+        "SHIFT_NOT_FOUND",
+        "Schedule tidak memiliki referensi shift atau data waktu (startTime). Hubungi admin."
+      );
+    }
+
+    shift = {
+      id: null,
+      // Prioritas nama: title (jika event/manual) → name → fallback default
+      name: schedule.title || schedule.name || "Jadwal Kerja",
+      startTime: schedule.startTime,
+      endTime: schedule.endTime || null,
+      lateTolerance: typeof schedule.lateTolerance === "number" ? schedule.lateTolerance : 0,
+      type: schedule.type || "manual",
+    };
   }
-
-  const shiftDoc = await db
-    .collection("companies")
-    .doc(companyId)
-    .collection("shifts")
-    .doc(schedule.shiftId)
-    .get();
-
-  if (!shiftDoc.exists) {
-    throw new ShiftScheduleError(
-      "SHIFT_NOT_FOUND",
-      `Data master shift '${schedule.shiftId}' tidak ditemukan. Hubungi admin.`
-    );
-  }
-
-  const shift = { id: shiftDoc.id, ...shiftDoc.data() };
 
   return { schedule, shift };
 }
