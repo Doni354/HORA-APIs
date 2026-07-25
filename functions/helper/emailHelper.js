@@ -1,5 +1,21 @@
 /* eslint-disable */
-const { db } = require("../config/firebase");
+const nodemailer = require("nodemailer");
+
+/**
+ * SMTP Transporter via Hostinger
+ * Kredensial dibaca dari environment variables (.env)
+ */
+const createTransporter = () => {
+  return nodemailer.createTransport({
+    host: process.env.SMTP_HOST || "smtp.hostinger.com",
+    port: parseInt(process.env.SMTP_PORT || "465"),
+    secure: true, // true untuk port 465 (SSL)
+    auth: {
+      user: process.env.SMTP_USER || "cs@vorce.id",
+      pass: process.env.SMTP_PASS,
+    },
+  });
+};
 
 /**
  * EMAIL TEMPLATES ENGINE (MODULAR)
@@ -80,7 +96,7 @@ class EmailTemplates {
                     </div>
                     <p>Jika Anda menyetujui tindakan ini, klik tombol di bawah:</p>
                     <div style="text-align: center; margin: 30px 0;">
-                        <a href="${link}" style="background-color: #dc2626; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Setujui & Reset Sekarang</a>
+                        <a href="${link}" style="background-color: #dc2626; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Setujui &amp; Reset Sekarang</a>
                     </div>
                 `;
         break;
@@ -148,7 +164,7 @@ class EmailTemplates {
                     <p>Untuk menerima undangan ini, silakan klik tombol di bawah, lalu:</p>
                     <ol style="line-height: 2;">
                         <li>Login menggunakan Akun Google (Email: ${data.targetEmail || "email Anda"})</li>
-                        <li>Lengkapi data diri (No Telp & WA)</li>
+                        <li>Lengkapi data diri (No Telp &amp; WA)</li>
                     </ol>
                     <div style="text-align: center; margin: 30px 0;">
                         <a href="${link}" style="background-color: #4f46e5; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Buka Undangan</a>
@@ -236,17 +252,34 @@ class EmailTemplates {
   }
 
   /**
-   * Fungsi Helper untuk langsung kirim ke koleksi 'mail' di Firestore
+   * Kirim email langsung via SMTP Hostinger menggunakan nodemailer.
+   * @param {string|string[]} to - Alamat email tujuan (string atau array)
+   * @param {string} type - Tipe template email
+   * @param {Object} data - Data untuk mengisi template
    */
   static async send(to, type, data) {
     const emailData = this.generate(type, data);
-    return await db.collection("mail").add({
-      to: to,
-      message: {
+
+    const toAddress = Array.isArray(to) ? to.join(", ") : to;
+    const fromAddress = `"Vorce" <${process.env.SMTP_USER || "cs@vorce.id"}>`;
+
+    console.log(`[EmailHelper] Sending email | type="${type}" | to="${toAddress}" | subject="${emailData.subject}"`);
+
+    try {
+      const transporter = createTransporter();
+      const info = await transporter.sendMail({
+        from: fromAddress,
+        to: toAddress,
         subject: emailData.subject,
         html: emailData.html,
-      },
-    });
+      });
+
+      console.log(`[EmailHelper] Email sent successfully | type="${type}" | to="${toAddress}" | messageId="${info.messageId}"`);
+      return info;
+    } catch (error) {
+      console.error(`[EmailHelper] Failed to send email | type="${type}" | to="${toAddress}" | error="${error.message}"`);
+      throw error;
+    }
   }
 }
 
