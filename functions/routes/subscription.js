@@ -1105,6 +1105,156 @@ router.post("/apple-webhook", async (req, res) => {
   }
 });
 
+// ==================================================================
+// 5. VERIFY IAP (One-Time Purchase — bukan subscription)
+// ==================================================================
+/**
+ * POST /api/subscription/verify-iap
+ *
+ * Endpoint ini dipanggil Flutter setelah user berhasil membeli
+ * IAP (In-App Purchase) one-time (consumable), seperti token AI.
+ *
+ * Body yang diharapkan:
+ * {
+ *   "transactionId": "string",   — ID transaksi dari Store
+ *   "productId": "mitsu_ai_token_1000",
+ *   "platform": "google_play" | "apple"   (opsional, default google_play)
+ * }
+ *
+ * Flow:
+ * 1. Validasi input & productId
+ * 2. Cek fraud: transactionId sudah pernah diproses?
+ * 3. Tambah paid_credits_remaining di users/{uid}
+ * 4. Log transaksi ke users/{uid}/log_token
+ * 5. Simpan transactionId ke iap_tokens untuk fraud prevention
+ */
+
+// Config one-time IAP products
+// key = productId, value = { creditAmount, description }
+const IAP_PRODUCTS = {
+  mitsu_ai_token_1000: {
+    description: "Mitsu AI Token 1000",
+    creditAmount: 30000,  // 30k credits ditambahkan ke paid_credits_remaining
+  },
+};
+
+router.post("/verify-iap", verifyToken, async (req, res) => {
+  try {
+    const { transactionId, productId, platform } = req.body;
+    const user = req.user;
+
+    // ─── A. VALIDASI INPUT ───
+    if (!transactionId || !productId) {
+      return res.status(400).json({
+        message: "transactionId dan productId wajib diisi.",
+      });
+    }
+
+    const iapConfig = IAP_PRODUCTS[productId];
+    if (!iapConfig) {
+      return res.status(400).json({
+        message: `Product IAP '${productId}' tidak dikenali.`,
+      });
+    }
+
+    // ─── B. FRAUD CHECK: TRANSACTION ID REUSE ───
+    // Simpan di collection iap_tokens agar tidak bisa diklaim 2x
+    const iapTokenRef = db
+      .collection("iap_tokens")
+      .doc(`${platform || "google_play"}_${transactionId}`);
+
+    const iapTokenDoc = await iapTokenRef.get();
+    if (iapTokenDoc.exists) {
+      return res.status(409).json({
+        message: "Transaksi ini sudah pernah diproses.",
+      });
+    }
+
+    // ─── C. CARI USER DOC DI COLLECTION users ───
+    // Email diambil dari JWT token (req.user.email)
+    // Di Firestore, doc users menggunakan email sebagai doc ID
+    const email = user.email;
+    if (!email) {
+      return res.status(403).json({
+        message: "Email user tidak ditemukan di token.",
+      });
+    }
+
+    const userRef = db.collection("users").doc(email);
+    const userDoc = await userRef.get();
+
+    if (!userDoc.exists) {
+      return res.status(404).json({
+        message: "User tidak ditemukan di database.",
+      });
+    }
+
+    // Ambil uid dari dokumen user (untuk dipakai di log_token.receivedTo)
+    const userData = userDoc.data();
+    const uid = userData.uid || email; // fallback ke email kalau uid tidak ada
+
+    // ─── D. ATOMIC UPDATE: TAMBAH CREDITS + LOG TRANSAKSI ───
+    const now = Timestamp.now();
+    const { FieldValue } = require("firebase-admin/firestore");
+
+    // Auto-generate ID untuk log entry
+    const logRef = userRef.collection("log_token").doc();
+
+    const logEntry = {
+      amount: iapConfig.creditAmount,
+      createdAt: now,
+      receivedTo: uid,
+      timestamp: now,
+      transactionId: transactionId,
+      type: "purchase",
+      productId: productId,
+      platform: platform || "google_play",
+    };
+
+    const batch = db.batch();
+
+    // 1. Tambah paid_credits_remaining ke user doc
+    // Pakai set + merge:true supaya field dibuat otomatis kalau belum ada
+    batch.set(userRef, {
+      paid_credits_remaining: FieldValue.increment(iapConfig.creditAmount),
+    }, { merge: true });
+
+    // 2. Log transaksi di subcollection log_token
+    batch.set(logRef, logEntry);
+
+    // 3. Simpan transactionId ke iap_tokens (fraud prevention)
+    batch.set(iapTokenRef, {
+      uid: uid,
+      email: email,
+      productId: productId,
+      creditAmount: iapConfig.creditAmount,
+      platform: platform || "google_play",
+      processedAt: now,
+    });
+
+    await batch.commit();
+
+    console.log(
+      `[IAP] ✅ Purchase processed: ${productId} for email=${email} uid=${uid}, ` +
+        `+${iapConfig.creditAmount} credits, txId=${transactionId}`
+    );
+
+    return res.status(200).json({
+      message: "Pembelian token berhasil diproses!",
+      data: {
+        productId: productId,
+        description: iapConfig.description,
+        creditAdded: iapConfig.creditAmount,
+        transactionId: transactionId,
+        type: "purchase",
+      },
+    });
+  } catch (e) {
+    console.error("[IAP] Verify IAP Error:", e);
+    return res.status(500).json({ message: "Server Error" });
+  }
+});
+
 // ──────────────────────────────────────────────
 // EXPORT
 // ──────────────────────────────────────────────
