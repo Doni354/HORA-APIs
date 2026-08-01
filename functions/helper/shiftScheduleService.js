@@ -38,7 +38,7 @@ async function resolveUserShift(companyId, userId, targetDate, zone = "Asia/Jaka
   const schedulesSnap = await db
     .collection("companies")
     .doc(companyId)
-    .collection("shiftSchedules")
+    .collection("schedules")
     .where("isActive", "==", true)
     .get();
 
