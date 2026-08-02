@@ -19,17 +19,17 @@ Setiap request ke endpoint protected harus melewati middleware `verifyToken`. Mi
 
 ```mermaid
 flowchart TD
-    A[Request masuk] --> B{Ada header\nAuthorization: Bearer?}
+    A[Request masuk] --> B{"Ada header\nAuthorization: Bearer?"}
     B -->|Tidak| C[401 Token tidak ditemukan]
     B -->|Ya| D[jwt.verify dengan JWT_SECRET]
     D -->|Invalid/expired| E[403 Token invalid]
-    D -->|Valid| F[Lookup users/{email} di Firestore]
+    D -->|Valid| F["Lookup users/{email} di Firestore"]
     F -->|Tidak ada| G[401 User tidak ditemukan]
     F -->|Ada| H{Device Lock aktif?}
-    H -->|Tidak| I[Set req.user, next]
+    H -->|Tidak| I["Set req.user, next()"]
     H -->|Ya| J{deviceId cocok?}
     J -->|Cocok| I
-    J -->|Tidak cocok| K[401 Sesi kadaluarsa\nforceLogout:true]
+    J -->|Tidak cocok| K["401 Sesi kadaluarsa\nforceLogout:true"]
 ```
 
 ---

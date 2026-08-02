@@ -1,7 +1,7 @@
 # AI_Walkthrough — Vorce Project SOP
 
-> Dokumen ini adalah **SOP wajib** yang harus dibaca dan dipatuhi oleh AI
-> setiap kali memulai sesi pengerjaan di project ini.
+> File ini adalah **memori kerja dan doktrin wajib** AI untuk project Vorce.
+> Berisi: konteks sistem, workflow pengerjaan, konvensi kode, dan panduan dokumentasi.
 
 ---
 
@@ -12,137 +12,274 @@
 | **Nama Project** | **Vorce** |
 | **Nama Lama** | HORA (JANGAN digunakan lagi) |
 | **Repo** | `d:\Project\HORA-APIs` |
-| **Backend** | Node.js + Express, deploy ke Firebase Cloud Functions |
-| **Database** | Firestore |
-| **Storage** | Cloudflare R2 |
+| **Backend** | Node.js 22 + Express, Firebase Cloud Functions Gen 2 |
+| **Database** | Firestore (NoSQL) |
+| **Storage** | Cloudflare R2 (`helper/uploadFile.js`, `config/r2.js`) |
 | **Platform** | Google Play + Apple App Store (Flutter client) |
+| **API Base URL** | `https://api-y4ntpb3uvq-et.a.run.app` |
+| **Docs URL** | `https://hora-7394b.web.app/doc/` |
 
 > [!CAUTION]
-> Project ini bernama **VORCE**. Jangan pernah menyebut "HORA" dalam kode,
-> komentar, log, maupun dokumentasi yang dibuat ke depannya.
+> Project ini bernama **VORCE**. Jangan pernah menyebut "HORA" dalam kode, log, komentar, maupun dokumentasi baru.
 
 ---
 
-## 2. Workflow 4 Fase — WAJIB DIIKUTI
+## 2. Arsitektur File yang Wajib Diketahui
 
-Setiap pengerjaan fitur atau perubahan logic **harus melewati 4 fase ini secara berurutan**.
-Tidak boleh skip, tidak boleh loncat fase.
+```
+functions/
+├── config/
+│   ├── firebase.js        ← Firestore & Admin SDK init (gunakan ini untuk db, auth)
+│   ├── r2.js              ← Cloudflare R2 S3 client
+│   └── products.js        ← ⭐ SATU-SATUNYA tempat definisi produk (subscription + IAP)
+│
+├── middleware/
+│   └── token.js           ← verifyToken: decode JWT → set req.user
+│                            req.user berisi: { email, role, idCompany, status, nama, deviceId }
+│
+├── helper/
+│   ├── subscriptionService.js      ← resolveBenefits, mapSubscriptionState, isActiveState, recalculateLimits
+│   ├── googlePlayService.js        ← verifyGooglePlayPurchase(purchaseToken, productId, user)
+│   ├── appleSubscriptionService.js ← verifyApplePurchase + handleAppleWebhook
+│   ├── iapService.js               ← processIAPPurchase(transactionId, productId, platform, user)
+│   ├── playstore.js                ← Google Play API client: verifySubscription, acknowledgeSubscription
+│   │                                 Export: BASE_MAX_STORAGE, BASE_MAX_DEVICES
+│   ├── applestore.js               ← Apple App Store Server API: verifyAppleTransaction, decodeAppleJWS
+│   │                                 Export: APPLE_BUNDLE_ID, getNotificationAction
+│   ├── emailHelper.js              ← Nodemailer / Hostinger SMTP (bukan Firestore mail collection lagi)
+│   ├── uploadFile.js               ← R2 upload/delete + update usedStorage
+│   ├── shiftScheduleService.js     ← getActiveShift(companyId, currentTime)
+│   └── logCompanyActivity.js       ← log aktivitas ke companies/{id}/activity
+│
+├── routes/                ← THIN ROUTER ONLY — validasi input + call helper/service
+│   ├── subscription.js    ← /verify, /status, /verify-apple, /apple-webhook, /verify-iap
+│   ├── login.js           ← /login, /register, /register-company
+│   ├── profile.js         ← /profile GET/PUT
+│   ├── absensi.js         ← /check-in, /check-out, /history
+│   ├── arsip.js           ← file management admin
+│   ├── karyawan.js        ← employee management
+│   └── ...
+│
+└── scheduler/
+    ├── rtdn.js            ← Google Play RTDN via Pub/Sub (subscription status update)
+    └── subscription.js    ← Scheduled job: cleanup expired subscriptions
+```
 
 ---
+
+## 3. Pola Kode yang Wajib Diikuti
+
+### Pattern Route (Thin Router)
+```js
+router.post("/endpoint", verifyToken, async (req, res) => {
+  // 1. Validasi input saja
+  const { field } = req.body;
+  if (!field) return res.status(400).json({ message: "field wajib diisi." });
+
+  // 2. Delegasi ke service/helper
+  const result = await myService.doSomething(field, req.user);
+
+  // 3. Map result ke HTTP response
+  if (!result.ok) return res.status(result.status).json({ message: result.message });
+  return res.status(200).json({ message: "Sukses", data: result.data });
+});
+```
+
+### Pattern Service Return
+```js
+// Service selalu return { ok, status?, message?, data? }
+return { ok: false, status: 409, message: "Duplikat." };
+return { ok: true, data: { ... } };
+```
+
+### Firestore — Field Baru
+```js
+// JANGAN pakai update() jika field belum tentu ada
+// HARUS pakai set + merge: true
+batch.set(ref, { newField: value }, { merge: true });
+```
+
+### Firestore — Atomic Write
+```js
+const batch = db.batch();
+batch.set(ref1, data1);
+batch.set(ref2, data2); // fraud registry
+await batch.commit();   // semua atau tidak sama sekali
+```
+
+### Fraud Prevention Pattern
+```js
+// Selalu cek token/transactionId SEBELUM proses apapun
+const tokenDoc = await db.collection("iap_tokens").doc(`${platform}_${txId}`).get();
+if (tokenDoc.exists) return { ok: false, status: 409, message: "Sudah diproses." };
+```
+
+---
+
+## 4. Data Model Penting
+
+```
+users/{email}                     ← primary key = email (bukan uid)
+  ├── uid, username, role
+  ├── idCompany                   ← FK ke companies/
+  ├── status: "active"|"inactive"
+  ├── paid_credits_remaining      ← AI token credits (int)
+  └── log_token/ {logId}          ← riwayat pembelian IAP
+
+companies/{companyId}
+  ├── maxStorage (bytes), max_devices
+  └── subscriptions/ {subId}
+      ├── productId, productType ("tier"|"addon"|"velinked")
+      ├── platform ("google_play"|"apple")
+      ├── status ("active"|"grace_period"|"expired"|...)
+      └── addedStorage, maxDevices
+
+subscription_tokens/{purchaseToken}     ← fraud registry Google Play
+iap_tokens/{platform}_{transactionId}   ← fraud registry IAP
+```
+
+---
+
+## 5. Workflow 4 Fase — WAJIB DIIKUTI
+
+Setiap pengerjaan fitur **harus melewati 4 fase berurutan**. Tidak boleh skip.
 
 ### Fase 1 — PLANNING (Tunggu ACC)
-
-**Trigger:** User meminta fitur baru atau perubahan logic.
-
-**Yang harus dilakukan:**
-- Buat draft rencana yang berisi:
-  - **Business Logic** — apa yang sistem ini lakukan secara bisnis?
-  - **Alur / Flow** — step-by-step dari request masuk sampai response keluar
-  - **Endpoint spec** — method, path, request body, response shape
-  - **File yang akan diubah** — list file + apa yang berubah di tiap file
-- Presentasikan ke user dan **TUNGGU kata "ACC"**
-
-> [!IMPORTANT]
-> **JANGAN menulis kode apapun di Fase 1.** Bahkan jika yakin logikanya sudah
-> benar, tetap tunggu approval dari user sebelum lanjut ke Fase 2.
-
----
+- Buat draft: Business Logic, Alur, Endpoint spec, File yang berubah
+- **Tunggu kata "ACC"** sebelum nulis kode apapun
 
 ### Fase 2 — IMPLEMENTASI (Setelah ACC)
-
-**Trigger:** User sudah bilang "ACC" atau setara.
-
-**Yang harus dilakukan:**
-- Tulis kode sesuai plan yang sudah di-ACC
-- Jelaskan setiap perubahan: file apa, baris mana, kenapa
-- Jika di tengah implementasi ditemukan kondisi yang tidak sesuai plan →
-  **STOP, kembali ke Fase 1**, update plan, minta ACC ulang
-
-> [!NOTE]
-> Di fase ini, dokumentasi Docusaurus **belum dibuat/diubah**. Fokus ke kode saja.
-
----
+- Ikuti pola kode di atas (thin router, service return pattern, dll)
+- Kalau ada hal tak terduga → STOP, kembali ke Fase 1
 
 ### Fase 3 — AUTOMATED TESTING (Tunggu Hasil Run)
-
-**Trigger:** Implementasi selesai.
-
-**Yang harus dilakukan:**
-- Buat script testing otomatis untuk fitur yang baru diimplementasi
-  - Format: script Node.js sederhana atau Jest test case
-  - Script harus bisa dijalankan user dengan satu command (tidak butuh Postman)
-  - Cakupan: happy path + edge cases penting (token invalid, double submit, dll)
-- Kirimkan script ke user dan **TUNGGU hasil run (Pass / Fail)**
-
-> [!IMPORTANT]
-> **Jangan membuat atau mengubah file Docusaurus di Fase 3.**
-> Dokumentasi hanya dibuat setelah test dipastikan berhasil di Fase 4.
-
-Jika user melaporkan **FAIL**:
-- Analisa error, kembali ke **Fase 2** untuk fix
-- Buat script test ulang jika perlu, tunggu hasil run lagi
-
----
+- Buat script Node.js test (`scripts/test-xxx.js`) yang bisa dijalankan dengan `node scripts/test-xxx.js`
+- Cakupan: happy path + edge cases (token invalid, 409 duplicate, field missing)
+- **Jangan buat/ubah doc Docusaurus di fase ini**
+- Tunggu hasil user: Pass / Fail
 
 ### Fase 4 — DOKUMENTASI FINAL (Setelah Test Pass)
-
-**Trigger:** User konfirmasi test **BERHASIL / PASS**.
-
-**Yang harus dilakukan:**
-- Buat atau update file MDX di `docs-site/docs/` yang relevan
-- Setiap halaman dokumentasi **wajib berisi**:
-  1. **Tujuan Fitur** — bisnis problem yang diselesaikan
-  2. **Alur Logic** — flow diagram (Mermaid) atau step-by-step
-  3. **Payload** — request body, response shape, contoh nyata
-  4. **Decision Making** — kenapa logic dibuat seperti ini (trade-off, alternatif yang tidak dipilih)
-
-> [!TIP]
-> Dokumentasi yang baik menjawab pertanyaan "kenapa" lebih dari "apa".
-> Sertakan contoh kasus nyata, bukan hanya definisi teknis.
+- Buat/update file MDX di `docs-site/docs/`
+- Format wajib setiap halaman (lihat bagian 6 di bawah)
+- Build + deploy: `npm run docs:build && firebase deploy --only hosting`
+- Commit: `git add -A && git commit -m "docs: ..."`
 
 ---
 
-## 3. Struktur File Penting
+## 6. Format Wajib Dokumentasi (Per Halaman)
 
+Setiap halaman doc WAJIB berisi semua bagian ini:
+
+### Untuk Route/Endpoint
+```md
+## Tujuan
+[bisnis problem yang diselesaikan — 1-2 kalimat]
+
+## Endpoint
+[method, path, contoh request body + tabel field, contoh response sukses + tabel error codes]
+
+## Alur Logic
+[Mermaid sequenceDiagram — wajib visual, bukan teks]
+
+## Efek di Firestore / Database
+[field apa yang berubah, collection mana, format data]
+
+## Decision Making
+[kenapa dibikin seperti ini — trade-off, alternatif yang tidak dipilih]
 ```
-d:\Project\HORA-APIs\
-├── AI_Walkthrough.md           ← file ini (SOP)
-├── docs-site/                  ← Docusaurus project
-│   └── docs/
-│       ├── intro.md
-│       ├── architecture.md
-│       ├── subscription/
-│       │   ├── overview.md
-│       │   ├── google-play.md
-│       │   ├── apple.md
-│       │   └── iap-tokens.md
-│       └── features/
-├── functions/
-│   ├── config/
-│   │   └── products.js         ← SATU-SATUNYA tempat tambah produk baru
-│   ├── helper/
-│   │   ├── subscriptionService.js
-│   │   ├── googlePlayService.js
-│   │   ├── appleSubscriptionService.js
-│   │   └── iapService.js
-│   └── routes/
-│       └── subscription.js     ← thin router only
-└── firebase.json
+
+### Untuk Helper/Service
+```md
+## Tujuan
+[fungsi ini responsible untuk apa]
+
+## Exports
+[list function yang di-export + signature]
+
+## Flow Internal
+[Mermaid flowchart — step-step internal logic]
+
+## Digunakan Oleh
+[list route/file yang memanggil helper ini]
+```
+
+### Untuk Scheduler
+```md
+## Trigger
+[kapan dijalankan — Pub/Sub topic, cron schedule, dll]
+
+## Tujuan
+[apa yang dilakukan]
+
+## Alur
+[Mermaid flow]
+
+## Efek di Firestore
 ```
 
 ---
 
-## 4. Aturan Kode
+## 7. Panduan Mermaid — Anti Error
 
-| Aturan | Detail |
+Mermaid sering error karena karakter khusus. **Aturan wajib:**
+
+```md
+# SALAH — kurung kurawal {} di dalam label [] menyebabkan parse error
+F[Lookup users/{email}]
+
+# BENAR — quote label yang mengandung {}, (), [], |
+F["Lookup users/{email}"]
+
+# Diamond shape (decision) = {} tanpa quote
+H{Kondisi aktif?}
+
+# Newline di label
+A["Baris pertama\nBaris kedua"]
+```
+
+Karakter yang **HARUS** di-quote jika di dalam label:
+- `{` `}` — diamond shape
+- `(` `)` — stadium shape  
+- `[` `]` — nested bracket
+
+---
+
+## 8. Docs Build & Deploy Workflow
+
+```bash
+# Setelah edit file di docs-site/docs/
+
+# 1. Build + copy ke public/doc/
+npm run docs:build
+
+# 2. Deploy hosting
+firebase deploy --only hosting
+
+# 3. Commit
+git add -A && git commit -m "docs: <deskripsi singkat>"
+
+# Atau sekaligus:
+npm run docs:build && firebase deploy --only hosting
+```
+
+**Dev mode (preview lokal tanpa build):**
+```bash
+npm run docs:dev
+# → http://localhost:3000/doc/
+```
+
+---
+
+## 9. File yang TIDAK Boleh Diubah Sembarangan
+
+| File | Risiko |
 |---|---|
-| Nama produk baru | Edit `config/products.js` saja, jangan hardcode di route |
-| Logic per platform | Tetap di service file masing-masing (`googlePlayService`, `appleSubscriptionService`, `iapService`) |
-| Route handler | Hanya validasi input + call service + return response |
-| Fraud prevention | Selalu cek token/transactionId sebelum proses apapun |
-| Atomic write | Gunakan `batch` Firestore untuk operasi yang harus konsisten |
-| Field baru di Firestore | Gunakan `set(..., { merge: true })` bukan `update()` untuk mencegah error field-not-exist |
+| `config/firebase.js` | Mengubah ini bisa break semua Firestore connection |
+| `middleware/token.js` | Mengubah `req.user` shape bisa break semua route |
+| `config/products.js` | Gunakan ini SAJA untuk tambah produk, jangan duplikat di route |
+| `firebase.json` | Perubahan hosting config harus ditest lokal dulu |
+| `functions/.env` | **JANGAN PERNAH COMMIT** |
 
 ---
 
-*Last updated: 2026-08-01*
+*Last updated: 2026-08-02*
