@@ -1,4 +1,8 @@
 {
+  "scripts": {
+    "docs:build": "node scripts/build-docs.js",
+    "docs:dev": "npm start --prefix docs-site"
+  },
   "dependencies": {
     "dotenv": "^17.2.3",
     "firebase-functions": "^7.0.0"
