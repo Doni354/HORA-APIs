@@ -25,6 +25,43 @@ const sidebars = {
     },
     {
       type: 'category',
+      label: '⏰ Scheduler',
+      items: [
+        'scheduler/rtdn',
+        'scheduler/scheduler',
+      ],
+    },
+    {
+      type: 'category',
+      label: '🔧 Helper & Service',
+      items: [
+        'helper/subscriptionService',
+        'helper/playstore',
+        'helper/applestore',
+        'helper/uploadFile',
+        'helper/emailHelper',
+        'helper/shiftScheduleService',
+      ],
+    },
+    {
+      type: 'category',
+      label: '🌐 Routes',
+      items: [
+        'routes/login',
+        'routes/profile',
+        'routes/absensi',
+        'routes/izin',
+        'routes/tugas',
+        'routes/berkas',
+        'routes/arsip',
+        'routes/inbox',
+        'routes/company',
+        'routes/kontak',
+        'routes/reimburse',
+      ],
+    },
+    {
+      type: 'category',
       label: '📦 Fitur',
       items: [
         'features/storage',
