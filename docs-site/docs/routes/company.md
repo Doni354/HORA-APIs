@@ -43,6 +43,17 @@ Karyawan bisa bergabung dengan dua cara:
 
 ### POST `/verify-employee` — Persetujuan Kandidat
 
+Fungsi ini mengubah kondisi kandidat yang melamar via Public Link:
+- **Jika Disetujui (`approved: true`)**:
+  - Kolom `role` diperbarui dari `"candidate"` menjadi `"staff"`.
+  - Kolom `status` dirubah dari `"pending_approval"` menjadi `"active"`.
+  - Menetapkan stempel waktu `approvedAt` (Timestamp) dan pelacak `approvedBy`.
+  - Data perusahaan `totalEmployees` ditambahkan +1 (increment).
+- **Jika Ditolak (`approved: false`)**:
+  - Kolom `role` direndahkan menjadi `"rejected"`.
+  - Kolom `status` diubah menjadi `"rejected"`.
+  - Menetapkan `rejectedAt` dan `rejectedBy`.
+
 ````mermaid
 sequenceDiagram
     participant FE as Frontend Apps
@@ -73,7 +84,14 @@ sequenceDiagram
 
 ### POST `/fire-employee`
 
-Hanya Admin yang berhak memecat (tidak dapat menargetkan Pemilik Perusahaan / *Owner*).
+Hanya Admin yang berhak memecat (tidak dapat menargetkan Pemilik Perusahaan / *Owner*). Fungsi ini memisahkan ikatan karyawan dengan perusahaan sepenuhnya.
+Perubahan di dalam koleksi `users/{targetEmail}`:
+- `role` dikembalikan ke `"rejected"`. 
+- `status` diubah jadi `"fired"`.
+- `idCompany` diputus, dilepas menjadi `null`. Ini sangat relevan karena mengembalikan karyawan sebagai orang bebas/independen yang bisa bergabung dengan company lain.
+- Jejak pemecatan dicatat persis: `firedAt`, `firedBy`, dan `firedReason`.
+
+Pelepasan karyawan juga memicu pengurangan _quota_ (`totalEmployees` -1) dan penarikan paksa izin _Device Binding_ untuk mesin milik si akun yang dipecat.
 
 ````mermaid
 flowchart LR
@@ -89,7 +107,11 @@ Setelah dipecat:
 
 ### POST `/update-role`
 Admin mengirimkan atribut `action` berupa `"promote"` atau `"demote"`.
-Proses ini dilengkapi *Notifikasi Dalam Aplikasi* ke collection `users/{targetEmail}/notifications` jika berhasil.
+Prosedur ini merubah field `role` di koleksi user sembari melindungi Owner (Owner tidak akan bisa diturunkan pangkat).
+- **Promote**: Mengubah `role` dari `"staff"` ➜ `"admin"`.
+- **Demote**: Mengubah `role` dari `"admin"` ➜ `"staff"`.
+
+Proses ini akan menumbuhkan _Notifikasi Dalam Aplikasi_ pada _sub-collection_ `users/{targetEmail}/notifications` jika pemrosesan mutasi berjalan sukses.
 
 ---
 
@@ -104,11 +126,12 @@ Fitur membatasi pengguna login di perangkat yang berbeda. Apabila `enabled` di-*
 ## 4. Delete Company (Nuclear Option)
 
 ### DELETE `/delete-company`
-Aksi berbahaya ini hanya bisa dipicu oleh **Owner Perusahaan** (atribut `createdBy` == `actor.email`).
-Alur lengkap:
-1. Kick dan reset seluruh karyawan di Firestore menjadi `idCompany`: null, role `rejected`.
-2. Kirim email pemberitahuan ke setiap karyawan secara paralel.
-3. Connect ke Cloudflare R2 untuk melakukan operasi melibas / *recursive delete* semua *file storage* (contoh: *attachment* slip gaji atau rekam jejak lamaran) yang berawalan `company_files/{idCompany}/`.
-4. Berantas (*delete collection*) semua sub-koleksi bersarang milik Firestore: `files`, `logs`, `leaves`, `tasks`.
-5. Hapus dokumen utama perusahaan.
-6. Catat sejarah penghapusan ke dalam koleksi rahasia `super_admin_logs`.
+Aksi berbahaya ini hanya bisa dipicu oleh **Owner Perusahaan** (atribut `createdBy` == `actor.email`). 
+Penghapusan ini memutasi **seluruh** data pegawai (modifikasi massal):
+1. Rutinitas reset mematikan akses setiap `users`: mengubah `role` jadi `"rejected"`, status menjadi `"company_deleted"`, serta field `idCompany` dan `companyName` dialihkan ke `null`.
+2. Semua notifikasi aktif ke masa depan di-stempel dengan penarikan _array_ `fcmTokens: []`. Field catatan tambahan dilekatkan (`companyDeletedAt` dan `companyDeletedBy`).
+3. Disusul email pemberitahuan ke setiap karyawan (Firebase Cloud Email secara paralel/rentetan).
+4. Connect ke Cloudflare R2 untuk melakukan operasi melibas / *recursive delete* semua *file storage* yang berawalan `company_files/{idCompany}/`.
+5. Berantas (*delete collection*) semua sub-koleksi bersarang Firestore: `files`, `logs`, `leaves`, `tasks`.
+6. Pemusnahan total dokumen utama perusahaan.
+7. Catat rentetan sejarah penghancuran ke dalam koleksi khusus `super_admin_logs`.
