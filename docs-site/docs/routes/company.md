@@ -1,14 +1,13 @@
 ---
 id: company
 sidebar_position: 10
-title: Company & Employee Management
+title: Company Management
 ---
 
 # Route — `company.js`
 
 ## Tujuan
-
-Manajemen internal perusahaan: onboarding karyawan, pemecatan, manajemen role, device binding, shift scheduling, undangan via email, dan pengaturan perusahaan lainnya.
+Manajemen operasional perusahaan yang meliputi pengelolaan data karyawan (onboarding, promote/demote role, memecat), pendaftaran kandidat melalui undangan email maupun link publik, pengaturan fitur keamanan perusahaan (Device Lock), hingga pencatatan log aktivitas dan penghapusan data secara menyeluruh.
 
 ---
 
@@ -16,111 +15,100 @@ Manajemen internal perusahaan: onboarding karyawan, pemecatan, manajemen role, d
 
 | Method | Path | Auth | Role | Deskripsi |
 |---|---|---|---|---|
-| `POST` | `/company/verify-employee` | ✅ | Admin | Setujui/tolak kandidat |
-| `POST` | `/company/fire-employee` | ✅ | Admin | Keluarkan karyawan |
-| `POST` | `/company/update-role` | ✅ | Admin | Promote/demote role |
-| `POST` | `/company/invite` | ✅ | Admin | Kirim undangan karyawan |
-| `GET` | `/company/devices` | ✅ | Admin | List device terdaftar |
-| `DELETE` | `/company/devices/:email` | ✅ | Admin | Reset binding device karyawan |
-| `PUT` | `/company/device-lock` | ✅ | Admin | Toggle device lock company |
-| `POST` | `/company/shift` | ✅ | Admin | Buat shift schedule |
-| `GET` | `/company/shifts` | ✅ | Admin | List shift schedules |
-| `PUT` | `/company/shift/:id` | ✅ | Admin | Update shift |
-| `DELETE` | `/company/shift/:id` | ✅ | Admin | Hapus shift |
-| `POST` | `/company/leave-quota` | ✅ | Admin | Set kuota izin per bulan |
+| `POST` | `/company/verify-employee` | ✅ | Admin | Menerima (`staff`) atau menolak (`rejected`) lamaran kandidat. |
+| `POST` | `/company/fire-employee` | ✅ | Admin | Mengeluarkan karyawan dari perusahaan. |
+| `POST` | `/company/update-role` | ✅ | Admin | Promote (menjadi admin) atau demote (menjadi staff) role karyawan. |
+| `GET` | `/company/log-activity` | ✅ | Any | Mengambil log aktivitas perusahaan. |
+| `POST` | `/company/log-activity` | ✅ | Any | Membuat log aktivitas baru. |
+| `GET` | `/company/list` | ✅ | Any | Mengambil daftar pegawai beserta info limitasi storage. |
+| `POST` | `/company/send-invite` | ✅ | Admin | Mengirimkan link undangan bergabung via Email. |
+| `POST` | `/company/accept-invite` | ❌* | Any | Memvalidasi dan menerima undangan (butuh `idToken` di *body*). |
+| `GET` | `/company/apply-company/:idCompany` | ❌ | Any | (Public) Mengambil info perusahaan untuk tampilan lamaran. |
+| `POST` | `/company/apply` | ❌* | Any | Kandidat melamar pekerjaan (butuh `idToken` di *body*). |
+| `GET` | `/company/public-link` | ✅ | Any | Mendapatkan link lamaran pekerjaan publik (untuk di-*share* Admin). |
+| `POST` | `/company/toggle-device-lock` | ✅ | Admin | Mengaktifkan/menonaktifkan *Device Lock* (1 user 1 HP). |
+| `DELETE` | `/company/delete-company` | ✅ | Owner | Menghapus perusahaan dan SELURUH data miliknya (termasuk file R2). |
+
+*\*Tidak memakai middleware `verifyToken`, namun memverifikasi `idToken` langsung secara mandiri di controller menggunakan Firebase Admin Auth.*
 
 ---
 
-## POST `/verify-employee` — Onboarding Kandidat
+## 1. Onboarding Karyawan
 
-Karyawan yang baru register masuk dengan `role: "candidate"`. Admin harus menyetujui atau menolak.
+Karyawan bisa bergabung dengan dua cara:
+1. **Via Undangan Admin (`/send-invite` & `/accept-invite`)**
+   Admin membuat kode undangan sementara yang disimpan di `invitations` collection selama 24 jam. Karyawan yang mendapatkan link lewat email otomatis langsung menjadi **Staff** ketika klik bergabung.
+2. **Via Public Link (`/apply` & `/verify-employee`)**
+   Karyawan mendaftar dari web perusahaan tanpa diundang, masuk ke database dengan **status Candidate**. Admin kemudian menyetujui lamaran (panggil `/verify-employee`).
 
-```mermaid
+### POST `/verify-employee` — Persetujuan Kandidat
+
+````mermaid
 sequenceDiagram
-    participant A as Flutter Admin
+    participant FE as Frontend Apps
     participant BE as Route /company
     participant DB as Firestore
-    participant M as Email SMTP
+    participant M as EmailHelper
 
-    A->>BE: POST /verify-employee { targetEmail, approved: true }
-    BE->>DB: Cek targetUser.role === "candidate"
-    BE->>BE: checkCompanyQuota(idCompany)
-
-    alt approved = true
-        BE->>DB: Update user\nrole → "staff"\nstatus → "active"
-        BE->>DB: companies/{id}.totalEmployees += 1
-        BE->>M: Email "employee_accepted"
-        BE-->>A: 200 Pegawai berhasil diterima
-    else approved = false
-        BE->>DB: Update user\nrole → "rejected"\nstatus → "rejected"
-        BE->>M: Email "employee_rejected"
-        BE-->>A: 200 Pegawai ditolak
+    FE->>BE: POST /verify-employee { targetEmail, approved }
+    BE->>BE: Check adminRole, Target = "candidate"
+    
+    alt "approved == true"
+        BE->>BE: checkCompanyQuota()
+        BE->>DB: role = "staff", status = "active", company.totalEmployees += 1
+        BE->>DB: Log "APPROVE_EMPLOYEE"
+        BE->>M: Send "employee_approved" email
+        BE-->>FE: 200 Pegawai diterima
+    else "approved == false"
+        BE->>DB: role = "rejected", status = "rejected"
+        BE->>DB: Log "REJECT_EMPLOYEE"
+        BE->>M: Send "employee_rejected" email
+        BE-->>FE: 200 Pegawai ditolak
     end
-```
+````
 
 ---
 
-## POST `/fire-employee` — Keluarkan Karyawan
+## 2. Pemecatan & Manajemen Jabatan
 
-```mermaid
+### POST `/fire-employee`
+
+Hanya Admin yang berhak memecat (tidak dapat menargetkan Pemilik Perusahaan / *Owner*).
+
+````mermaid
 flowchart LR
-    A["POST /fire-employee { targetEmail, reason }"] --> B["Cek: role admin"]
-    B --> C["Cek: target dan actor\nbeda company? → Tolak"]
-    C --> D["Update user:\nstatus fired\nidCompany null"]
+    A["POST /fire-employee { targetEmail, reason }"] --> B["Validasi: role admin"]
+    B --> C["Cek target dan actor \n(proteksi Owner UID)"]
+    C --> D["Update target:\nstatus = 'fired', idCompany = null"]
     D --> E["companies.totalEmployees -= 1"]
-    E --> F["Hapus device binding"]
-    F --> G["Email employee_fired"]
-    G --> H["logCompanyActivity(FIRE_EMPLOYEE)"]
-```
-
+    E --> F["Email employee_fired & Log Activity"]
+````
 Setelah dipecat:
-- `idCompany` = `null` — user tidak bisa akses data company
-- JWT yang ada masih valid tapi semua endpoint yang cek `idCompany` akan reject
-- Device binding dihapus — kalau user ini punya binding di company, langsung bersih
+- `idCompany` menjadi `null`. Karyawan terbebas dan dapat melamar ke company lain. 
+- *Device Binding* yang terpasang otomatis dicabut ketika company mencoba memvalidasi sesi berikutnya, namun ID khusus ini akan ditarik.
+
+### POST `/update-role`
+Admin mengirimkan atribut `action` berupa `"promote"` atau `"demote"`.
+Proses ini dilengkapi *Notifikasi Dalam Aplikasi* ke collection `users/{targetEmail}/notifications` jika berhasil.
 
 ---
 
-## POST `/update-role` — Promote / Demote
+## 3. Fitur Device Lock
 
-| Action | Dari | Ke | Keterangan |
-|---|---|---|---|
-| `promote` | staff | admin | User menjadi admin |
-| `demote` | admin | staff | Admin dicabut jabatannya |
-
-Hanya ada 2 non-admin role: `admin` dan `staff`. `candidate` dan `superadmin` tidak bisa di-promote/demote via endpoint ini.
+### POST `/toggle-device-lock`
+Menerima struktur data di JSON body `{ enabled: true/false }`. 
+Fitur membatasi pengguna login di perangkat yang berbeda. Apabila `enabled` di-*set* aktif, namun belum ada object `deviceBindings` di dokumen perusahaan, maka field ini akan diinisialisasi otomatis ke *dictionary* kosong. Saat dinonaktifkan, seluruh `deviceBindings` ikut dibersihkan (reset ke `{}`).
 
 ---
 
-## Device Management
+## 4. Delete Company (Nuclear Option)
 
-### GET `/devices`
-Mengembalikan `deviceBindings` map dari company document — daftar semua device yang pernah terdaftar per email karyawan.
-
-```json
-{
-  "devices": [
-    { "email": "budi@example.com", "deviceId": "uuid-abc", "deviceInfo": "Samsung Galaxy S24" },
-    { "email": "siti@example.com", "deviceId": "uuid-xyz", "deviceInfo": "iPhone 15" }
-  ]
-}
-```
-
-### DELETE `/devices/:email`
-Reset binding device untuk satu karyawan. Karyawan harus login ulang dari device manapun untuk mendaftarkan device baru.
-
-### PUT `/device-lock`
-Toggle fitur device lock seluruh company:
-```json
-{ "enabled": true }
-```
-Jika `enabled: true`, karyawan yang login dari device berbeda akan di-force logout.
-
----
-
-## Decision Making
-
-**Kenapa `idCompany: null` saat dipecat, bukan hapus field?**
-`null` lebih eksplisit daripada field yang tidak ada. Middleware dan route handler cek `if (!user.idCompany)` — jika field tidak ada (undefined), beberapa pengecekan bisa lolos.
-
-**Kenapa device binding disimpan di company doc, bukan user doc?**
-Admin perlu melihat dan mengelola semua binding sekaligus dari satu dokumen. Jika di user doc, admin harus query semua user — lebih mahal dan complex.
+### DELETE `/delete-company`
+Aksi berbahaya ini hanya bisa dipicu oleh **Owner Perusahaan** (atribut `createdBy` == `actor.email`).
+Alur lengkap:
+1. Kick dan reset seluruh karyawan di Firestore menjadi `idCompany`: null, role `rejected`.
+2. Kirim email pemberitahuan ke setiap karyawan secara paralel.
+3. Connect ke Cloudflare R2 untuk melakukan operasi melibas / *recursive delete* semua *file storage* (contoh: *attachment* slip gaji atau rekam jejak lamaran) yang berawalan `company_files/{idCompany}/`.
+4. Berantas (*delete collection*) semua sub-koleksi bersarang milik Firestore: `files`, `logs`, `leaves`, `tasks`.
+5. Hapus dokumen utama perusahaan.
+6. Catat sejarah penghapusan ke dalam koleksi rahasia `super_admin_logs`.
