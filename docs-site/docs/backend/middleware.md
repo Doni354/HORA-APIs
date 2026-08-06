@@ -76,6 +76,20 @@ Fitur opsional per company. Jika `companies/{id}.deviceLockEnabled = true`:
 
 ---
 
+## Standar Respons API (Autentikasi)
+
+Saat memanggil endpoint yang di-protect oleh `verifyToken`, client (Frontend/Mobile) harus menangani kemungkinan respons berikut:
+
+- **`200 OK` / `201 Created`**: Transaksi berhasil (token valid dan aman, request berhasil diproses).
+- **`401 Unauthorized`**:
+  - Gagal karena token tidak disediakan: `{ message: "Akses ditolak. Token tidak ditemukan." }`
+  - Gagal karena user tidak ditemukan di database (terhapus): `{ message: "Token tidak valid. User tidak ditemukan." }`
+  - Gagal karena fitur *Device Lock* aktif dan login di perangkat lain: `{ message: "Sesi kadaluarsa. Akun Anda telah login di perangkat lain.", forceLogout: true }`
+- **`403 Forbidden`**:
+  - Gagal karena token kedaluwarsa (*expired*) atau formatnya salah/diubah: `{ message: "Token Invalid atau Kadaluarsa", error: "..." }`
+
+---
+
 ## Decision Making
 
 **Kenapa user di-lookup ke Firestore setiap request?**
