@@ -65,10 +65,12 @@ async function resolveUserShift(companyId, userId, targetDate, zone = "Asia/Jaka
     const start = data.startDate?.toDate ? data.startDate.toDate() : new Date(data.startDate);
     const end = data.endDate?.toDate ? data.endDate.toDate() : new Date(data.endDate);
 
-    // Bandingkan hanya tanggal (tanpa jam) agar inklusif
+    // Bandingkan hanya tanggal (tanpa jam) agar inklusif.
+    // ⚠️  WAJIB pakai toLocaleDateString + zone yang sama (bukan toISOString/UTC)
+    //     agar Timestamp "9 Agustus 00:00 WIB" tidak terbaca sebagai "8 Agustus UTC".
     const targetOnly = new Date(localDateStr + "T00:00:00");
-    const startOnly = new Date(start.toISOString().slice(0, 10) + "T00:00:00");
-    const endOnly = new Date(end.toISOString().slice(0, 10) + "T00:00:00");
+    const startOnly  = new Date(start.toLocaleDateString("en-CA", { timeZone: zone }) + "T00:00:00");
+    const endOnly    = new Date(end.toLocaleDateString("en-CA", { timeZone: zone }) + "T00:00:00");
 
     if (targetOnly < startOnly || targetOnly > endOnly) return;
 
