@@ -28,7 +28,7 @@ const KEY_FILE_PATH = path.join(__dirname, "..", "GoogleApiKey.json");
 
 // Subscription base limits (default tanpa subscription)
 // Dipakai oleh recalculateLimits() untuk menghitung total limit
-const BASE_MAX_STORAGE = 104857600; // 100 MB in bytes
+const BASE_MAX_STORAGE = 1073741824; // 1 GB in bytes
 const BASE_MAX_KARYAWAN = 3;
 const BASE_MAX_DEVICES = 0; // Default: 0 devices (Velinked fitur premium, no free tier)
 

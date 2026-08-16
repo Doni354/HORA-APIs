@@ -133,7 +133,7 @@ const PRODUCT_BENEFITS = {
 };
 
 // Subscription base limits (sama dengan playstore.js)
-const BASE_MAX_STORAGE = 104857600; // 100 MB
+const BASE_MAX_STORAGE = 1073741824; // 1 GB
 const BASE_MAX_KARYAWAN = 3;
 
 // ──────────────────────────────────────────────

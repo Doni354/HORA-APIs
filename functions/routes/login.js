@@ -693,7 +693,7 @@ router.post("/registrasi", async (req, res) => {
       const companyRef = db.collection("companies").doc(idCompany);
 
       // Setup Company dengan base limits (Free Tier)
-      // Base: 3 karyawan, 100MB storage
+      // Base: tanpa karyawan limit, 1GB storage
       // Limit ini akan bertambah jika company membeli subscription
       transaction.set(companyRef, {
         idCompany,
@@ -701,7 +701,7 @@ router.post("/registrasi", async (req, res) => {
         alamatLoc,
         totalLike: 0,
         // --- BATASAN SISTEM (FREE TIER) ---
-        maxStorage: 104857600, // Default: 100 MB in bytes (base limit)
+        maxStorage: 1073741824, // Default: 1 GB in bytes (base limit)
         usedStorage: 0, // Terpakai: 0 Bytes
         totalEmployees: 0, // Sync: 0 karyawan (owner tidak dihitung)
         max_devices: 0, // Default: 0 (Velinked fitur premium, harus beli subscription)
@@ -742,7 +742,7 @@ router.post("/registrasi", async (req, res) => {
       actorEmail: email,
       actorName: decodedToken.name || email,
       action: "REGISTER_COMPANY",
-      description: `Mendaftarkan perusahaan baru: ${namaPerusahaan} (Free Tier: 3 karyawan, 100MB storage)`,
+      description: `Mendaftarkan perusahaan baru: ${namaPerusahaan} (Free Tier: 1GB storage)`,
     });
 
     return res.status(200).json({
@@ -750,7 +750,7 @@ router.post("/registrasi", async (req, res) => {
       data: {
         companyCode: idCompany,
         companyName: namaPerusahaan,
-        maxStorage: 104857600, // 100 MB
+        maxStorage: 1073741824, // 1 GB
       },
     });
   } catch (e) {
