@@ -390,6 +390,17 @@ router.post("/login-google", async (req, res) => {
     const data = userDoc.data();
 
     // --- D. Cek Status & Role (Panggil Helper) ---
+
+    // Handle khusus: user yang companynya dihapus
+    // Jangan blokir dengan "rejected" biasa — arahkan ke registrasi ulang
+    if (data.status === "company_deleted") {
+      return res.status(403).json({
+        message: "Perusahaan Anda telah dihapus.",
+        error: "COMPANY_DELETED",
+        info: "Silakan daftarkan perusahaan baru untuk melanjutkan.",
+      });
+    }
+
     const statusError = checkUserStatus(data);
     if (statusError) {
       // Handle khusus untuk pending_deletion
