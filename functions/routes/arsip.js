@@ -502,8 +502,8 @@ router.get("/export/kehadiran", async (req, res) => {
       "Cekin",
       "Cekout",
       "Lokasi",
+      "Gaji",
     ];
-
     // 3. Gabungkan Data per Karyawan
     const employeeData = new Map(); // Map<Nama, { absensi: Map<day, data>, leaves: Map<day, data> }>
 
@@ -552,7 +552,7 @@ router.get("/export/kehadiran", async (req, res) => {
       const dataStartRow = currentRow + 2;
 
       // Nama (A)
-      const lastRowOfEmp = dataStartRow + 6;
+      const lastRowOfEmp = dataStartRow + 7;
       ws.mergeCells(`A${dataStartRow}:A${lastRowOfEmp}`);
       const nameCell = ws.getCell(`A${dataStartRow}`);
       nameCell.value = namaKaryawan;
@@ -583,7 +583,7 @@ router.get("/export/kehadiran", async (req, res) => {
 
         if (leaveType) {
           // JIKA ADA IZIN: Isi semua baris rincian dengan tipe izin, background ORANYE
-          for (let idx = 0; idx < 7; idx++) {
+          for (let idx = 0; idx < 8; idx++) {
             const cell = ws.getCell(dataStartRow + idx, col);
             cell.value = leaveType;
             ExcelFormatter.setCellStyle(
@@ -595,9 +595,13 @@ router.get("/export/kehadiran", async (req, res) => {
           }
         } else if (absensi) {
           // JIKA ADA ABSENSI: Isi data normal
-          const durasiFormatted = absensi.durasi
-            ? ExcelFormatter.formatDuration(absensi.durasi)
-            : "-";
+          let durasiFormatted = "-";
+          if (absensi.waktuCheckIn && absensi.waktuCheckOut) {
+            durasiFormatted = calculateDuration(absensi.waktuCheckIn, absensi.waktuCheckOut);
+          } else if (absensi.durasi) {
+            durasiFormatted = ExcelFormatter.formatDuration(absensi.durasi);
+          }
+          
           const rowValues = [
             absensi.shift,
             ExcelFormatter.formatToAMPM(absensi.waktuCheckIn),
@@ -606,6 +610,7 @@ router.get("/export/kehadiran", async (req, res) => {
             absensi.fotoCheckIn ? "Buka" : "-",
             absensi.fotoCheckOut ? "Buka" : "-",
             absensi.alamatLatitude || absensi.alamatLoc ? "Buka" : "-",
+            "-",
           ];
           const links = [
             null,
@@ -617,6 +622,7 @@ router.get("/export/kehadiran", async (req, res) => {
             absensi.alamatLatitude && absensi.alamatLongtitude
               ? `https://www.google.com/maps?q=${absensi.alamatLatitude},${absensi.alamatLongtitude}`
               : null,
+            null,
           ];
 
           rowValues.forEach((val, idx) => {
@@ -630,7 +636,7 @@ router.get("/export/kehadiran", async (req, res) => {
           });
         } else {
           // KOSONG: Isi "-" background MERAH (default applyDataCellStyle untuk "-")
-          for (let idx = 0; idx < 7; idx++) {
+          for (let idx = 0; idx < 8; idx++) {
             const cell = ws.getCell(dataStartRow + idx, col);
             ExcelFormatter.applyDataCellStyle(cell, "-");
           }
