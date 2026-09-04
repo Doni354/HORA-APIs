@@ -49,40 +49,40 @@ const PRODUCT_BENEFITS = {
 
   // ── STORAGE ADDONS — Google Play ──
   vorce_storage_1: {
-    name: "Storage Addon 3GB", type: "addon",
-    monthly: { addedStorage: 3221225472,   addedKaryawan: 0 },    // 3 GB
-    yearly:  { addedStorage: 38654705664,  addedKaryawan: 0 },    // 36 GB
+    name: "Storage Addon 10GB", type: "addon",
+    monthly: { addedStorage: 10737418240,   addedKaryawan: 0 },   // 10 GB
+    yearly:  { addedStorage: 128849018880,  addedKaryawan: 0 },   // 120 GB
   },
   vorce_storage_2: {
-    name: "Storage Addon 10GB", type: "addon",
-    monthly: { addedStorage: 10737418240,  addedKaryawan: 0 },    // 10 GB
-    yearly:  { addedStorage: 128849018880, addedKaryawan: 0 },    // 120 GB
+    name: "Storage Addon 50GB", type: "addon",
+    monthly: { addedStorage: 53687091200,   addedKaryawan: 0 },   // 50 GB
+    yearly:  { addedStorage: 644245094400,  addedKaryawan: 0 },   // 600 GB
   },
   vorce_storage_3: {
-    name: "Storage Addon 30GB", type: "addon",
-    monthly: { addedStorage: 32212254720,  addedKaryawan: 0 },    // 30 GB
-    yearly:  { addedStorage: 386547056640, addedKaryawan: 0 },    // 360 GB
+    name: "Storage Addon 125GB", type: "addon",
+    monthly: { addedStorage: 134217728000,  addedKaryawan: 0 },   // 125 GB
+    yearly:  { addedStorage: 1610612736000, addedKaryawan: 0 },   // 1500 GB
   },
   vorce_storage_4: {
-    name: "Storage Addon 60GB", type: "addon",
-    monthly: { addedStorage: 64424509440,  addedKaryawan: 0 },    // 60 GB
-    yearly:  { addedStorage: 773094113280, addedKaryawan: 0 },    // 720 GB
+    name: "Storage Addon 250GB", type: "addon",
+    monthly: { addedStorage: 268435456000,  addedKaryawan: 0 },   // 250 GB
+    yearly:  { addedStorage: 3221225472000, addedKaryawan: 0 },   // 3000 GB
   },
 
   // ── VELINKED PLANS — Google Play ──
   velinked_pro: {
     name: "Velinked Pro", type: "velinked",
-    monthly: { addedStorage: 0, addedKaryawan: 0, maxDevices: 10 },
-    yearly:  { addedStorage: 0, addedKaryawan: 0, maxDevices: 10 },
+    monthly: { addedStorage: 0, addedKaryawan: 0, maxDevices: 3 },
+    yearly:  { addedStorage: 0, addedKaryawan: 0, maxDevices: 3 },
   },
   velinked_pro_plus: {
     name: "Velinked Pro Plus", type: "velinked",
-    monthly: { addedStorage: 0, addedKaryawan: 0, maxDevices: 50 },
-    yearly:  { addedStorage: 0, addedKaryawan: 0, maxDevices: 50 },
+    monthly: { addedStorage: 0, addedKaryawan: 0, maxDevices: 5 },
+    yearly:  { addedStorage: 0, addedKaryawan: 0, maxDevices: 5 },
   },
   velinked_pro_max: {
     name: "Velinked Pro Max", type: "velinked",
-    monthly: { addedStorage: 0, addedKaryawan: 0, maxDevices: 200 },
+    monthly: { addedStorage: 0, addedKaryawan: 0, maxDevices: 13 },
   },
 
   // ── TIER PLANS — Apple ──
@@ -96,22 +96,22 @@ const PRODUCT_BENEFITS = {
   vorce_enterprise_year:  { name: "Enterprise Plan", type: "tier",    yearly:  { addedStorage: 386547056640, addedKaryawan: 300 } },
 
   // ── STORAGE ADDONS — Apple ──
-  vorce_storage_1_month:  { name: "Storage Addon 3GB",  type: "addon", monthly: { addedStorage: 3221225472,   addedKaryawan: 0 } },
-  vorce_storage_1_year:   { name: "Storage Addon 3GB",  type: "addon", yearly:  { addedStorage: 38654705664,  addedKaryawan: 0 } },
-  vorce_storage_2_month:  { name: "Storage Addon 10GB", type: "addon", monthly: { addedStorage: 10737418240,  addedKaryawan: 0 } },
-  vorce_storage_2_year:   { name: "Storage Addon 10GB", type: "addon", yearly:  { addedStorage: 128849018880, addedKaryawan: 0 } },
-  vorce_storage_3_month:  { name: "Storage Addon 30GB", type: "addon", monthly: { addedStorage: 32212254720,  addedKaryawan: 0 } },
-  vorce_storage_3_year:   { name: "Storage Addon 30GB", type: "addon", yearly:  { addedStorage: 386547056640, addedKaryawan: 0 } },
-  vorce_storage_4_month:  { name: "Storage Addon 60GB", type: "addon", monthly: { addedStorage: 64424509440,  addedKaryawan: 0 } },
-  vorce_storage_4_year:   { name: "Storage Addon 60GB", type: "addon", yearly:  { addedStorage: 773094113280, addedKaryawan: 0 } },
+  vorce_storage_1_month:  { name: "Storage Addon 10GB", type: "addon", monthly: { addedStorage: 10737418240,   addedKaryawan: 0 } },
+  vorce_storage_1_year:   { name: "Storage Addon 10GB", type: "addon", yearly:  { addedStorage: 128849018880,  addedKaryawan: 0 } },
+  vorce_storage_2_month:  { name: "Storage Addon 50GB", type: "addon", monthly: { addedStorage: 53687091200,   addedKaryawan: 0 } },
+  vorce_storage_2_year:   { name: "Storage Addon 50GB", type: "addon", yearly:  { addedStorage: 644245094400,  addedKaryawan: 0 } },
+  vorce_storage_3_month:  { name: "Storage Addon 125GB", type: "addon", monthly: { addedStorage: 134217728000,  addedKaryawan: 0 } },
+  vorce_storage_3_year:   { name: "Storage Addon 125GB", type: "addon", yearly:  { addedStorage: 1610612736000, addedKaryawan: 0 } },
+  vorce_storage_4_month:  { name: "Storage Addon 250GB", type: "addon", monthly: { addedStorage: 268435456000,  addedKaryawan: 0 } },
+  vorce_storage_4_year:   { name: "Storage Addon 250GB", type: "addon", yearly:  { addedStorage: 3221225472000, addedKaryawan: 0 } },
 
   // ── VELINKED PLANS — Apple ──
-  velinked_pro_max_month:  { name: "Velinked Pro Max",  type: "velinked", monthly: { addedStorage: 0, addedKaryawan: 0, maxDevices: 200 } },
-  velinked_pro_max_year:   { name: "Velinked Pro Max",  type: "velinked", yearly:  { addedStorage: 0, addedKaryawan: 0, maxDevices: 200 } },
-  velinked_pro_plus_month: { name: "Velinked Pro Plus", type: "velinked", monthly: { addedStorage: 0, addedKaryawan: 0, maxDevices: 50  } },
-  velinked_pro_plus_year:  { name: "Velinked Pro Plus", type: "velinked", yearly:  { addedStorage: 0, addedKaryawan: 0, maxDevices: 50  } },
-  velinked_pro_month:      { name: "Velinked Pro",      type: "velinked", monthly: { addedStorage: 0, addedKaryawan: 0, maxDevices: 10  } },
-  velinked_pro_year:       { name: "Velinked Pro",      type: "velinked", yearly:  { addedStorage: 0, addedKaryawan: 0, maxDevices: 10  } },
+  velinked_pro_max_month:  { name: "Velinked Pro Max",  type: "velinked", monthly: { addedStorage: 0, addedKaryawan: 0, maxDevices: 13 } },
+  velinked_pro_max_year:   { name: "Velinked Pro Max",  type: "velinked", yearly:  { addedStorage: 0, addedKaryawan: 0, maxDevices: 13 } },
+  velinked_pro_plus_month: { name: "Velinked Pro Plus", type: "velinked", monthly: { addedStorage: 0, addedKaryawan: 0, maxDevices: 5  } },
+  velinked_pro_plus_year:  { name: "Velinked Pro Plus", type: "velinked", yearly:  { addedStorage: 0, addedKaryawan: 0, maxDevices: 5  } },
+  velinked_pro_month:      { name: "Velinked Pro",      type: "velinked", monthly: { addedStorage: 0, addedKaryawan: 0, maxDevices: 3  } },
+  velinked_pro_year:       { name: "Velinked Pro",      type: "velinked", yearly:  { addedStorage: 0, addedKaryawan: 0, maxDevices: 3  } },
 };
 
 // ──────────────────────────────────────────────
