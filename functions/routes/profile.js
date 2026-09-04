@@ -12,7 +12,7 @@ const { r2 } = require("../config/r2");
 const BUCKET_NAME = "vorce";
 const CDN_BASE = "https://cdn.vorce.id";
 const router = express.Router();
-const { Timestamp } = require("firebase-admin/firestore");
+const { Timestamp, FieldValue } = require("firebase-admin/firestore");
 const { logCompanyActivity } = require("../helper/logCompanyActivity");
 const { checkPhoneUnique } = require("../helper/phoneValidator");
 const EmailTemplates = require("../helper/emailHelper");
@@ -1012,25 +1012,53 @@ router.get("/user-storage", verifyToken, async (req, res) => {
 // 2. GENERATE VALET KEY UNTUK USER STORAGE
 router.post("/user-storage/valet-key", verifyToken, async (req, res) => {
   try {
-    const uid = req.user.uid || req.user.email;
-    const { fileName, mimeType, size } = req.body;
+    const email = req.user.email;
+    const uid = req.user.uid || email;
+    const { fileName, mimeType, fileSize: rawFileSize } = req.body;
 
-    if (!fileName || !mimeType) {
-      return res.status(400).json({ message: "fileName dan mimeType wajib diisi." });
+    if (!fileName || !mimeType || rawFileSize == null) {
+      return res.status(400).json({ message: "fileName, mimeType, dan fileSize wajib diisi." });
+    }
+
+    const actualFileSize = Number(rawFileSize);
+    if (isNaN(actualFileSize) || actualFileSize <= 0) {
+      return res.status(400).json({ message: "fileSize harus berupa angka positif (bytes)." });
+    }
+    
+    // Cek Quota Limit
+    const userRef = db.collection("users").doc(email);
+    const userDoc = await userRef.get();
+    if (!userDoc.exists) return res.status(404).json({ message: "User tidak ditemukan" });
+    
+    const userData = userDoc.data();
+    const maxStorage = userData.max_storage || (100 * 1024 * 1024); // Default 100MB
+    const usedStorage = userData.usedStorage || 0;
+    
+    // Format Viewable
+    const { formatFileSize } = require("../helper/uploadFile");
+    const fileSize = actualFileSize;
+
+    if (usedStorage >= maxStorage) {
+      return res.status(400).json({ message: "Penyimpanan penuh! Hapus berkas lama atau hubungi admin.", code: "STORAGE_FULL" });
+    }
+    if (usedStorage + fileSize > maxStorage) {
+      return res.status(400).json({
+        message: `File terlalu besar (${formatFileSize(fileSize)}). Sisa kuota tidak mencukupi.`,
+        code: "QUOTA_EXCEEDED"
+      });
     }
 
     const cleanUid = uid.replace(/[^a-zA-Z0-9]/g, "");
     const ext = pathModule.extname(fileName).toLowerCase() || "";
     const uuid = crypto.randomUUID();
-    const objectKey = \`user_storage/\${cleanUid}/\${Date.now()}_\${uuid}\${ext}\`;
+    const objectKey = `user_storage/${cleanUid}/${Date.now()}_${uuid}${ext}`;
     
-    // Asumsikan kita butuh helper yg didapat dari uploadFile
     const presignedUrl = await generatePresignedPutUrl(objectKey, mimeType, 300);
 
     return res.status(200).json({
       uploadUrl: presignedUrl,
       objectKey,
-      publicUrl: \`\${CDN_BASE}/\${objectKey}\`,
+      publicUrl: `${CDN_BASE}/${objectKey}`,
       expiresInSeconds: 300
     });
   } catch (e) {
@@ -1049,12 +1077,11 @@ router.post("/user-storage", verifyToken, async (req, res) => {
       return res.status(400).json({ message: "objectKey dan originalName wajib diisi." });
     }
     
-    const cleanUid = (req.user.uid || req.user.email).replace(/[^a-zA-Z0-9]/g, "");
-    if (!objectKey.startsWith(\`user_storage/\${cleanUid}/\`)) {
+    const cleanUid = (req.user.uid || email).replace(/[^a-zA-Z0-9]/g, "");
+    if (!objectKey.startsWith(`user_storage/${cleanUid}/`)) {
       return res.status(403).json({ message: "objectKey tidak valid untuk user ini." });
     }
 
-    // Verifikasi eksistensi file pada bucket asli di r2
     let realContentLength;
     try {
       const head = await r2.send(new HeadObjectCommand({ Bucket: BUCKET_NAME, Key: objectKey }));
@@ -1063,27 +1090,48 @@ router.post("/user-storage", verifyToken, async (req, res) => {
       return res.status(422).json({ message: "File tidak ditemukan di storage. Upload gagal atau belum slesai.", code: "FILE_NOT_IN_STORAGE" });
     }
 
-    const { formatFileSize } = require("../helper/uploadFile"); // untuk generate string viewable size
+    const { formatFileSize } = require("../helper/uploadFile"); 
+    const userRef = db.collection("users").doc(email);
+    let newDocRef;
+    let fileData;
 
-    const newDocRef = db.collection("users").doc(email).collection("storage").doc();
-    const fileData = {
-      id: newDocRef.id,
-      fileName: originalName,
-      storagePath: objectKey,
-      downloadUrl: \`\${CDN_BASE}/\${objectKey}\`,
-      mimeType: mimeType || "application/octet-stream",
-      size: formatFileSize ? formatFileSize(realContentLength) : realContentLength.toString(),
-      sizeBytes: realContentLength,
-      createdAt: Timestamp.now(),
-    };
+    await db.runTransaction(async (t) => {
+      const userSnap = await t.get(userRef);
+      if (!userSnap.exists) throw new Error("USER_NOT_FOUND");
+      
+      const userData = userSnap.data();
+      const maxStorage = userData.max_storage || (100 * 1024 * 1024);
+      const usedStorage = userData.usedStorage || 0;
+      
+      if (usedStorage + realContentLength > maxStorage) {
+        throw new Error("QUOTA_EXCEEDED");
+      }
 
-    await newDocRef.set(fileData);
+      newDocRef = userRef.collection("storage").doc();
+      fileData = {
+        id: newDocRef.id,
+        fileName: originalName,
+        storagePath: objectKey,
+        downloadUrl: `${CDN_BASE}/${objectKey}`,
+        mimeType: mimeType || "application/octet-stream",
+        size: formatFileSize ? formatFileSize(realContentLength) : realContentLength.toString(),
+        sizeBytes: realContentLength,
+        createdAt: Timestamp.now(),
+      };
+
+      t.set(newDocRef, fileData);
+      t.update(userRef, { usedStorage: FieldValue.increment(realContentLength) });
+    });
 
     return res.status(201).json({
       message: "Data file berhasil ditambahkan",
       data: fileData
     });
   } catch (e) {
+    if (e.message === "QUOTA_EXCEEDED") {
+      if (req.body?.objectKey) await deleteOldFileFromR2(req.body.objectKey); 
+      return res.status(400).json({ message: "Kuota storage tidak cukup. File dihapus dari storage.", code: "QUOTA_EXCEEDED" });
+    }
     console.error("User Storage Confirm Error:", e);
     return res.status(500).json({ message: "Server Error", error: e.message });
   }
@@ -1095,17 +1143,24 @@ router.delete("/user-storage/:fileId", verifyToken, async (req, res) => {
     const email = req.user.email;
     const fileId = req.params.fileId;
 
-    const docRef = db.collection("users").doc(email).collection("storage").doc(fileId);
-    const docSnap = await docRef.get();
+    const userRef = db.collection("users").doc(email);
+    const docRef = userRef.collection("storage").doc(fileId);
+    let fileData = null;
 
-    if (!docSnap.exists) {
-      return res.status(404).json({ message: "File metadata tidak ditemukan" });
-    }
+    await db.runTransaction(async (t) => {
+      const docSnap = await t.get(docRef);
+      if (!docSnap.exists) {
+        throw new Error("FILE_NOT_FOUND");
+      }
+      fileData = docSnap.data();
 
-    const fileData = docSnap.data();
+      t.delete(docRef);
+      t.update(userRef, {
+        usedStorage: FieldValue.increment(-(fileData.sizeBytes || 0)),
+      });
+    });
 
-    // Hapus file secara asinkron dari R2
-    if (fileData.storagePath) {
+    if (fileData && fileData.storagePath) {
       try {
         await r2.send(
           new DeleteObjectCommand({
@@ -1118,11 +1173,11 @@ router.delete("/user-storage/:fileId", verifyToken, async (req, res) => {
       }
     }
 
-    // Hapus dokumen di database
-    await docRef.delete();
-
     return res.status(200).json({ message: "File berhasil dihapus" });
   } catch (e) {
+    if (e.message === "FILE_NOT_FOUND") {
+      return res.status(404).json({ message: "File metadata tidak ditemukan" });
+    }
     console.error("Delete User Storage Error:", e);
     return res.status(500).json({ message: "Server Error", error: e.message });
   }
