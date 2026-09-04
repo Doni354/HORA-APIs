@@ -982,4 +982,150 @@ router.get("/recover-account", async (req, res) => {
   }
 });
 
+// =========================================================
+// USER STORAGE (R2 VALET KEY)
+// =========================================================
+
+// 1. GET USER STORAGE
+router.get("/user-storage", verifyToken, async (req, res) => {
+  try {
+    const email = req.user.email;
+    const snapshot = await db
+      .collection("users")
+      .doc(email)
+      .collection("storage")
+      .orderBy("createdAt", "desc")
+      .get();
+      
+    const files = [];
+    snapshot.forEach(doc => {
+      files.push({ id: doc.id, ...doc.data() });
+    });
+
+    return res.status(200).json({ message: "Success", data: files });
+  } catch (e) {
+    console.error("Get User Storage Error:", e);
+    return res.status(500).json({ message: "Server Error", error: e.message });
+  }
+});
+
+// 2. GENERATE VALET KEY UNTUK USER STORAGE
+router.post("/user-storage/valet-key", verifyToken, async (req, res) => {
+  try {
+    const uid = req.user.uid || req.user.email;
+    const { fileName, mimeType, size } = req.body;
+
+    if (!fileName || !mimeType) {
+      return res.status(400).json({ message: "fileName dan mimeType wajib diisi." });
+    }
+
+    const cleanUid = uid.replace(/[^a-zA-Z0-9]/g, "");
+    const ext = pathModule.extname(fileName).toLowerCase() || "";
+    const uuid = crypto.randomUUID();
+    const objectKey = \`user_storage/\${cleanUid}/\${Date.now()}_\${uuid}\${ext}\`;
+    
+    // Asumsikan kita butuh helper yg didapat dari uploadFile
+    const presignedUrl = await generatePresignedPutUrl(objectKey, mimeType, 300);
+
+    return res.status(200).json({
+      uploadUrl: presignedUrl,
+      objectKey,
+      publicUrl: \`\${CDN_BASE}/\${objectKey}\`,
+      expiresInSeconds: 300
+    });
+  } catch (e) {
+    console.error("User Storage Presign Error:", e);
+    return res.status(500).json({ message: "Server Error", error: e.message });
+  }
+});
+
+// 3. SUBMIT METADATA SETELAH UPLOAD SUKSES
+router.post("/user-storage", verifyToken, async (req, res) => {
+  try {
+    const email = req.user.email;
+    const { objectKey, originalName, mimeType } = req.body;
+
+    if (!objectKey || !originalName) {
+      return res.status(400).json({ message: "objectKey dan originalName wajib diisi." });
+    }
+    
+    const cleanUid = (req.user.uid || req.user.email).replace(/[^a-zA-Z0-9]/g, "");
+    if (!objectKey.startsWith(\`user_storage/\${cleanUid}/\`)) {
+      return res.status(403).json({ message: "objectKey tidak valid untuk user ini." });
+    }
+
+    // Verifikasi eksistensi file pada bucket asli di r2
+    let realContentLength;
+    try {
+      const head = await r2.send(new HeadObjectCommand({ Bucket: BUCKET_NAME, Key: objectKey }));
+      realContentLength = head.ContentLength;
+    } catch {
+      return res.status(422).json({ message: "File tidak ditemukan di storage. Upload gagal atau belum slesai.", code: "FILE_NOT_IN_STORAGE" });
+    }
+
+    const { formatFileSize } = require("../helper/uploadFile"); // untuk generate string viewable size
+
+    const newDocRef = db.collection("users").doc(email).collection("storage").doc();
+    const fileData = {
+      id: newDocRef.id,
+      fileName: originalName,
+      storagePath: objectKey,
+      downloadUrl: \`\${CDN_BASE}/\${objectKey}\`,
+      mimeType: mimeType || "application/octet-stream",
+      size: formatFileSize ? formatFileSize(realContentLength) : realContentLength.toString(),
+      sizeBytes: realContentLength,
+      createdAt: Timestamp.now(),
+    };
+
+    await newDocRef.set(fileData);
+
+    return res.status(201).json({
+      message: "Data file berhasil ditambahkan",
+      data: fileData
+    });
+  } catch (e) {
+    console.error("User Storage Confirm Error:", e);
+    return res.status(500).json({ message: "Server Error", error: e.message });
+  }
+});
+
+// 4. DELETE FILE USER STORAGE
+router.delete("/user-storage/:fileId", verifyToken, async (req, res) => {
+  try {
+    const email = req.user.email;
+    const fileId = req.params.fileId;
+
+    const docRef = db.collection("users").doc(email).collection("storage").doc(fileId);
+    const docSnap = await docRef.get();
+
+    if (!docSnap.exists) {
+      return res.status(404).json({ message: "File metadata tidak ditemukan" });
+    }
+
+    const fileData = docSnap.data();
+
+    // Hapus file secara asinkron dari R2
+    if (fileData.storagePath) {
+      try {
+        await r2.send(
+          new DeleteObjectCommand({
+            Bucket: BUCKET_NAME,
+            Key: decodeURIComponent(fileData.storagePath),
+          })
+        );
+      } catch (r2Err) {
+        console.error("Gagal menghapus file di R2 (abaikan):", r2Err.message);
+      }
+    }
+
+    // Hapus dokumen di database
+    await docRef.delete();
+
+    return res.status(200).json({ message: "File berhasil dihapus" });
+  } catch (e) {
+    console.error("Delete User Storage Error:", e);
+    return res.status(500).json({ message: "Server Error", error: e.message });
+  }
+});
+
 module.exports = router;
