@@ -49,6 +49,7 @@ const sidebars = {
       items: [
         'routes/login',
         'routes/profile',
+        'routes/user-profile-storage',
         'routes/absensi',
         'routes/izin',
         'routes/tugas',
