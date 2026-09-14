@@ -9,6 +9,7 @@ const { logCompanyActivity } = require("../helper/logCompanyActivity");
 const EmailTemplates = require("../helper/emailHelper");
 const { checkPhoneUnique } = require("../helper/phoneValidator");
 const { auth } = require("firebase-admin");
+const employeeService = require("../helper/employeeService");
 const router = express.Router();
 const crypto = require("crypto");
 
@@ -100,6 +101,13 @@ router.post("/verify-employee", verifyToken, async (req, res) => {
         approvedBy: adminData.email,
       });
 
+      // Sync ke subcollection employees (Phase 1 Source of Truth)
+      await employeeService.syncUserToEmployee(adminData.idCompany, targetEmail, {
+        role: "staff",
+        status: "active",
+        joinDate: Timestamp.now(),
+      });
+
       // B. Sync totalEmployees (increment)
       await db.collection("companies").doc(adminData.idCompany).update({
         totalEmployees: FieldValue.increment(1),
@@ -131,6 +139,12 @@ router.post("/verify-employee", verifyToken, async (req, res) => {
         status: "rejected",
         rejectedAt: Timestamp.now(),
         rejectedBy: adminData.email,
+      });
+
+      // Sync ke subcollection employees (status terminated)
+      await employeeService.syncUserToEmployee(adminData.idCompany, targetEmail, {
+        role: "staff",
+        status: "terminated",
       });
 
       // B. Log Aktivitas
@@ -196,6 +210,16 @@ router.post("/fire-employee", verifyToken, async (req, res) => {
       firedReason: finalReason,
       idCompany: null, // PENTING: Lepas ID Company biar kuota nambah
     });
+
+    // NON-DESTRUCTIVE: Catat status terminated di subcollection employees
+    await db.collection("companies").doc(actor.idCompany).collection("employees").doc(targetEmail).set({
+      userEmail: targetEmail,
+      status: "terminated",
+      deactivatedAt: Timestamp.now(),
+      deactivatedBy: actor.email,
+      deactivationReason: finalReason,
+      updatedAt: Timestamp.now(),
+    }, { merge: true });
 
     // Sync totalEmployees (decrement)
     await db.collection("companies").doc(actor.idCompany).update({
@@ -308,6 +332,9 @@ router.post("/update-role", verifyToken, async (req, res) => {
 
     // 4. Eksekusi Update
     await targetRef.update({ role: newRole });
+
+    // Sync role ke subcollection employees
+    await employeeService.syncUserToEmployee(actor.idCompany, targetEmail, { role: newRole });
 
     // 5. LOG AKTIVITAS COMPANY
     await logCompanyActivity(actor.idCompany, {
@@ -543,13 +570,16 @@ router.get("/list", verifyToken, async (req, res) => {
     const allUsers = [];
     snapshot.forEach((doc) => {
       const data = doc.data();
+      const roleStr = data.role || "staff";
+      const defaultJabatan = roleStr.charAt(0).toUpperCase() + roleStr.slice(1);
       allUsers.push({
         email: doc.id, 
         username: data.username || "Tanpa Nama",
         photoURL: data.photoURL || data.photoUrl || "",
         noTelp: data.noTelp || "-",
         noWA: data.noWA || "-",
-        role: data.role, 
+        role: roleStr, 
+        jabatan: data.jabatan || defaultJabatan,
         status: data.status, 
         joinedAt: data.createdAt ? data.createdAt.toDate() : null,
         isMe: doc.id === myEmail,
@@ -745,6 +775,14 @@ router.post("/accept-invite", async (req, res) => {
     await userRef.set(newUser);
     await inviteRef.delete();
 
+    // Sync ke subcollection employees sebagai active member
+    await employeeService.syncUserToEmployee(inviteData.idCompany, email, {
+      role: inviteData.role || "staff",
+      jabatan: (inviteData.role ? inviteData.role.charAt(0).toUpperCase() + inviteData.role.slice(1) : "Staff"),
+      status: "active",
+      joinDate: Timestamp.now(),
+    });
+
     // Sync totalEmployees (increment)
     await db.collection("companies").doc(inviteData.idCompany).update({
       totalEmployees: FieldValue.increment(1),
@@ -801,7 +839,7 @@ router.get("/apply-company/:idCompany", async (req, res) => {
 // ---------------------------------------------------------
 router.post("/apply", async (req, res) => {
     try {
-      const { idToken, idCompany, noTelp, noWA } = req.body;
+      const { idToken, idCompany, noTelp, noWA, cvUrl, applicantDesc, cvFileId } = req.body;
   
       // A. Validasi
       if (!idToken || !idCompany || !noTelp) {
@@ -863,7 +901,20 @@ router.post("/apply", async (req, res) => {
         // 3. Kalau user statusnya 'fired' atau 'rejected', BOLEH daftar ulang (Re-apply)
       }
   
-      // E. CREATE / UPDATE USER (Sebagai Candidate)
+      // E. RESOLVE CV DARI PERSONAL STORAGE (JIKA ADA cvFileId)
+      let finalCvUrl = cvUrl || null;
+      if (cvFileId) {
+        try {
+          const fileSnap = await db.collection("users").doc(email).collection("storage").doc(cvFileId).get();
+          if (fileSnap.exists) {
+            finalCvUrl = fileSnap.data().downloadUrl || finalCvUrl;
+          }
+        } catch (err) {
+          console.warn("[Apply CV Lookup] Gagal membaca file dari user storage:", err.message);
+        }
+      }
+
+      // F. CREATE / UPDATE USER (Sebagai Candidate untuk backward compatibility)
       const applicantData = {
         uid: uid,
         username: username,
@@ -879,6 +930,8 @@ router.post("/apply", async (req, res) => {
         
         role: "candidate",       // <--- Masuk sebagai Candidate
         status: "pending_approval", 
+        cvUrl: finalCvUrl,
+        applicantDesc: applicantDesc || "",
         
         verified: true, // Email google dianggap verified
         createdAt: Timestamp.now(), 
@@ -887,6 +940,24 @@ router.post("/apply", async (req, res) => {
   
       // Pakai set merge: true (penting untuk overwrite data lama jika ada)
       await userRef.set(applicantData, { merge: true });
+
+      // G. SIMPAN DATA APPLICANT KE SUBCOLLECTION EMPLOYEES (PHASE 1 SOURCE OF TRUTH)
+      const empApplicantData = {
+        userEmail: email,
+        role: "staff",
+        jabatan: "Pelamar / Applicant",
+        status: "applicant",
+        cvUrl: finalCvUrl,
+        applicantDesc: applicantDesc || "",
+        appliedAt: Timestamp.now(),
+        joinDate: null,
+        leaveBalance: 12,
+        shiftQuota: 0,
+        config: {},
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+      };
+      await db.collection("companies").doc(idCompany).collection("employees").doc(email).set(empApplicantData, { merge: true });
   
       // F. Log Aktivitas Company
       await logCompanyActivity(idCompany, {
@@ -1191,4 +1262,202 @@ router.delete("/delete-company", verifyToken, async (req, res) => {
 });
 
   
+// =========================================================
+// PHASE 1 — EMPLOYEE MANAGEMENT V2 ENDPOINTS
+// =========================================================
+
+/**
+ * Helper: Resolve Company ID and Enforce Tenant Isolation
+ */
+const resolveCompanyContext = (req) => {
+  const reqCompanyId = req.params.companyId || req.user.idCompany;
+  if (!reqCompanyId) {
+    const err = new Error("ID Company tidak valid atau user tidak terikat dengan perusahaan.");
+    err.status = 400;
+    throw err;
+  }
+  if (req.user.idCompany !== reqCompanyId) {
+    const err = new Error("Akses dilarang. Anda bukan anggota perusahaan ini.");
+    err.status = 403;
+    throw err;
+  }
+  return reqCompanyId;
+};
+
+/**
+ * 1. GET /employees & GET /:companyId/employees - List Karyawan
+ */
+const handleGetEmployees = async (req, res) => {
+  try {
+    const companyId = resolveCompanyContext(req);
+    const { status, role, search, page, limit } = req.query;
+
+    const result = await employeeService.getCompanyEmployees({
+      companyId,
+      status,
+      role,
+      search,
+      page,
+      limit,
+      requester: req.user,
+    });
+
+    return res.status(200).json({
+      ok: true,
+      message: "Data pegawai berhasil diambil.",
+      ...result,
+    });
+  } catch (err) {
+    console.error("Get Employees V2 Error:", err);
+    return res.status(err.status || 500).json({
+      ok: false,
+      message: err.message || "Server Error",
+    });
+  }
+};
+
+router.get("/employees", verifyToken, handleGetEmployees);
+router.get("/:companyId/employees", verifyToken, handleGetEmployees);
+
+/**
+ * 2. GET /employees/:email & GET /:companyId/employees/:email - Detail Karyawan
+ */
+const handleGetEmployeeDetail = async (req, res) => {
+  try {
+    const companyId = resolveCompanyContext(req);
+    const targetEmail = req.params.email;
+
+    const result = await employeeService.getEmployeeDetail({
+      companyId,
+      email: targetEmail,
+    });
+
+    if (!result) {
+      return res.status(404).json({
+        ok: false,
+        message: `Karyawan ${targetEmail} tidak ditemukan di perusahaan ini.`,
+      });
+    }
+
+    return res.status(200).json({
+      ok: true,
+      message: "Detail pegawai berhasil diambil.",
+      data: result,
+    });
+  } catch (err) {
+    console.error("Get Employee Detail V2 Error:", err);
+    return res.status(err.status || 500).json({
+      ok: false,
+      message: err.message || "Server Error",
+    });
+  }
+};
+
+router.get("/employees/:email", verifyToken, handleGetEmployeeDetail);
+router.get("/:companyId/employees/:email", verifyToken, handleGetEmployeeDetail);
+
+/**
+ * 3. PATCH /employees/:email & PATCH /:companyId/employees/:email - Update Field HR
+ */
+const handleUpdateEmployee = async (req, res) => {
+  try {
+    const companyId = resolveCompanyContext(req);
+    const targetEmail = req.params.email;
+
+    const result = await employeeService.updateEmployee({
+      companyId,
+      email: targetEmail,
+      updateData: req.body,
+      actor: req.user,
+    });
+
+    return res.status(200).json({
+      ok: true,
+      message: "Data pegawai berhasil diperbarui.",
+      data: result,
+    });
+  } catch (err) {
+    console.error("Update Employee V2 Error:", err);
+    return res.status(err.status || 500).json({
+      ok: false,
+      message: err.message || "Server Error",
+    });
+  }
+};
+
+router.patch("/employees/:email", verifyToken, handleUpdateEmployee);
+router.patch("/:companyId/employees/:email", verifyToken, handleUpdateEmployee);
+
+/**
+ * 4. POST /employees/:email/deactivate & POST /:companyId/employees/:email/deactivate - Deaktivasi (Non-Destructive)
+ */
+const handleDeactivateEmployee = async (req, res) => {
+  try {
+    const companyId = resolveCompanyContext(req);
+    const targetEmail = req.params.email;
+    const { status, reason } = req.body;
+
+    const result = await employeeService.deactivateEmployee({
+      companyId,
+      email: targetEmail,
+      status,
+      reason,
+      actor: req.user,
+    });
+
+    return res.status(200).json({
+      ok: true,
+      message: `Pegawai ${targetEmail} berhasil dinonaktifkan (${result.status}).`,
+      data: result,
+    });
+  } catch (err) {
+    console.error("Deactivate Employee V2 Error:", err);
+    return res.status(err.status || 500).json({
+      ok: false,
+      message: err.message || "Server Error",
+    });
+  }
+};
+
+router.post("/employees/:email/deactivate", verifyToken, handleDeactivateEmployee);
+router.post("/:companyId/employees/:email/deactivate", verifyToken, handleDeactivateEmployee);
+
+/**
+ * 5. GET /applicants & GET /:companyId/applicants - List Pelamar Pekerjaan
+ */
+const handleGetApplicants = async (req, res) => {
+  try {
+    const companyId = resolveCompanyContext(req);
+    if (req.user.role !== "admin") {
+      return res.status(403).json({ ok: false, message: "Hanya Admin yang dapat melihat daftar pelamar." });
+    }
+    const { search, page, limit } = req.query;
+
+    const result = await employeeService.getCompanyEmployees({
+      companyId,
+      status: "applicant",
+      search,
+      page,
+      limit,
+      requester: req.user,
+    });
+
+    return res.status(200).json({
+      ok: true,
+      message: "Daftar pelamar berhasil diambil.",
+      ...result,
+    });
+  } catch (err) {
+    console.error("Get Applicants Error:", err);
+    return res.status(err.status || 500).json({
+      ok: false,
+      message: err.message || "Server Error",
+    });
+  }
+};
+
+router.get("/applicants", verifyToken, handleGetApplicants);
+router.get("/:companyId/applicants", verifyToken, handleGetApplicants);
+
 module.exports = router;
+

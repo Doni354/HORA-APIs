@@ -87,6 +87,34 @@ flowchart LR
 
 ---
 
+## GET `/export/kehadiran` — Download Excel Rekap Kehadiran (Stream)
+
+Mengekspor rekap absensi karyawan ke format spreadsheet Excel (.xlsx) berdasarkan rentang bulan atau tanggal tertentu. File di-stream langsung ke response HTTP.
+
+### Query Params
+```
+?idperusahaan=company-id&month=2026-08
+```
+*(atau menggunakan filter `start_date` dan `end_date`)*
+
+### Struktur Header Rekap
+Sheet rekapitulasi memuat metadata pegawai pada baris atas sebelum tabel log tanggal:
+- Baris 4: **Nama Pegawai**
+- Baris 5: **ID / NIP**
+- Baris 6: **Jabatan**
+- Baris 7: **Shift Kerja**
+- Baris 8: **Gaji** (diambil secara dinamis dari data `companies/{id}/employees/{email}.gaji` dan diformat dalam mata uang Rupiah: `Rp X.XXX.XXX`, atau `-` bila belum diisi)
+
+```mermaid
+flowchart LR
+    A["GET /export/kehadiran"] --> B["Query absensi company\nrentang waktu bulan"]
+    B --> C["Lookup Gaji dari\ncompanies/{id}/employees/{email}"]
+    C --> D["Buat ExcelJS Workbook & format cells"]
+    D --> E["Stream ke HTTP response\nContent-Type: xlsx"]
+```
+
+---
+
 ## Decision Making
 
 **Kenapa export Excel di-stream, bukan disimpan ke R2 lalu return URL?**

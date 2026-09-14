@@ -115,7 +115,7 @@ sequenceDiagram
 
 :::tip
 Orphan uploads (presign tapi gagal confirm) dibersihkan otomatis oleh scheduler setiap jam.
-[→ Orphan Upload Cleanup](../scheduler/scheduler)
+[→ Orphan Upload Cleanup](../scheduler/scheduler.md)
 :::
 
 ---

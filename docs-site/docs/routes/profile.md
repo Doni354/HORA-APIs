@@ -29,7 +29,7 @@ Mengelola profil karyawan, profil perusahaan, dan list pegawai. Mencakup update 
 
 ## GET `/list-employees`
 
-Mengembalikan semua user yang `idCompany` sama dengan requester. Data difilter agar tidak leak info pribadi antar karyawan.
+Mengembalikan semua user yang `idCompany` sama dengan requester. Data difilter agar tidak leak info pribadi antar karyawan, serta diperkaya dengan atribut `jabatan` dari Core HR subcollection.
 
 ```json
 [
@@ -37,6 +37,7 @@ Mengembalikan semua user yang `idCompany` sama dengan requester. Data difilter a
     "email": "budi@example.com",
     "nama": "Budi Santoso",
     "role": "staff",
+    "jabatan": "Frontend Engineer",
     "status": "active",
     "fotoUrl": "https://cdn.vorce.id/...",
     "joinedAt": "2026-01-15T00:00:00.000Z"
@@ -76,7 +77,7 @@ POST /profile/delete-account
 
 User langsung kehilangan akses (token tidak valid lagi) tetapi data belum terhapus, memberi waktu untuk membatalkan.
 
-> **Lihat:** [Account Cleanup Scheduler](../scheduler/scheduler)
+> **Lihat:** [Account Cleanup Scheduler](../scheduler/scheduler.md)
 
 ---
 

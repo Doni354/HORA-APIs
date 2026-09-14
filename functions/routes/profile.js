@@ -77,6 +77,7 @@ router.get("/list-employees", verifyToken, async (req, res) => {
         photoUrl: data.photoUrl || null, // Tambahan: biar fotonya muncul di list
         noTelp: data.noTelp,
         role: data.role,
+        jabatan: data.jabatan || (data.role ? (data.role.charAt(0).toUpperCase() + data.role.slice(1)) : "Staff"),
         status: data.status,
         joinedAt: data.createdAt,
         isMe: doc.id === myEmail,
@@ -369,7 +370,7 @@ router.get("/user-profile/:email", verifyToken, async (req, res) => {
       id: 1, 
       idKaryawan: userData.uid || "", 
       gender: userData.gender || "Male", 
-      jabatan: userData.role ? userData.role.charAt(0).toUpperCase() + userData.role.slice(1) : "Staff",
+      jabatan: userData.jabatan || (userData.role ? userData.role.charAt(0).toUpperCase() + userData.role.slice(1) : "Staff"),
       statusAds: "Free"
     };
 

@@ -468,6 +468,26 @@ router.get("/export/kehadiran", async (req, res) => {
       .where("startDate", "<=", endDate)
       .get();
 
+    // 3. Ambil Data Karyawan dari Subcollection untuk Lookup Gaji
+    const empSnapshot = await db
+      .collection("companies")
+      .doc(idperusahaan)
+      .collection("employees")
+      .get()
+      .catch(() => ({ empty: true, docs: [] }));
+
+    const gajiMap = new Map();
+    if (empSnapshot.docs && empSnapshot.docs.length > 0) {
+      empSnapshot.docs.forEach((doc) => {
+        const d = doc.data();
+        if (d.gaji !== undefined && d.gaji !== null && d.gaji !== 0) {
+          const formatted = `Rp ${Number(d.gaji).toLocaleString("id-ID")}`;
+          gajiMap.set(doc.id.toLowerCase(), formatted);
+          if (d.userEmail) gajiMap.set(d.userEmail.toLowerCase(), formatted);
+        }
+      });
+    }
+
     const workbook = new ExcelJS.Workbook();
     const ws = workbook.addWorksheet("Arsip Kehadiran");
 
@@ -505,13 +525,19 @@ router.get("/export/kehadiran", async (req, res) => {
       "Gaji",
     ];
     // 3. Gabungkan Data per Karyawan
-    const employeeData = new Map(); // Map<Nama, { absensi: Map<day, data>, leaves: Map<day, data> }>
+    const employeeData = new Map(); // Map<Nama, { absensi: Map<day, data>, leaves: Map<day, data>, gaji: string }>
 
     absensiSnapshot.forEach((doc) => {
       const d = doc.data();
       const nama = d.namaKaryawan || "Tanpa Nama";
-      if (!employeeData.has(nama))
-        employeeData.set(nama, { absensi: new Map(), leaves: new Map() });
+      const idKaryawan = d.idKaryawan ? String(d.idKaryawan).toLowerCase() : "";
+      const empGaji = gajiMap.get(idKaryawan) || "-";
+
+      if (!employeeData.has(nama)) {
+        employeeData.set(nama, { absensi: new Map(), leaves: new Map(), gaji: empGaji });
+      } else if (employeeData.get(nama).gaji === "-" && empGaji !== "-") {
+        employeeData.get(nama).gaji = empGaji;
+      }
 
       const dateObj = d.tanggal.toDate
         ? d.tanggal.toDate()
@@ -610,7 +636,7 @@ router.get("/export/kehadiran", async (req, res) => {
             absensi.fotoCheckIn ? "Buka" : "-",
             absensi.fotoCheckOut ? "Buka" : "-",
             absensi.alamatLatitude || absensi.alamatLoc ? "Buka" : "-",
-            "-",
+            dataObj.gaji || "-",
           ];
           const links = [
             null,

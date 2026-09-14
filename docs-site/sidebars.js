@@ -41,6 +41,7 @@ const sidebars = {
         'helper/uploadFile',
         'helper/emailHelper',
         'helper/shiftScheduleService',
+        'helper/employeeService',
       ],
     },
     {
@@ -68,6 +69,7 @@ const sidebars = {
         'features/storage',
         'features/notifications',
         'features/attendance',
+        'features/employee-management',
       ],
     },
   ],
