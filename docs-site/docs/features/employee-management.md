@@ -63,11 +63,11 @@ graph TD
 - Tombol aksi: **"Terima"** (menjalankan verify approve) & **"Tolak"** (menjalankan verify reject).
 
 ### 6. `ApplyCompanyScreen` (Layar Lamaran Kandidat)
-- Form kandidat saat membuka link publik perusahaan (`/apply-company/:idCompany`).
-- Input deskripsi lamaran (`applicantDesc`).
+- Form kandidat saat membuka link publik perusahaan (`/apply-company/:idCompany`) atau saat pendaftaran pegawai di awal (`/login/register-employee`).
+- Input deskripsi lamaran (`applicantDesc` / `desc` / `bio`).
 - **Pemilihan CV:**
-  - Opsi A: Memilih dokumen yang sudah ada dari **Personal Storage** kandidat (`users/{email}/storage`). Kirim `cvFileId`.
-  - Opsi B: Mengirimkan tautan berkas CV langsung (`cvUrl`).
+  - Opsi A: Memilih dokumen yang sudah ada dari **Personal Storage** kandidat (`users/{email}/storage`). Kirim `cvFileId` atau `url` (file ID).
+  - Opsi B: Mengirimkan tautan berkas CV langsung (`url` / `cvUrl`).
 
 ---
 
@@ -392,6 +392,14 @@ Dipanggil pada `ApplyCompanyScreen` saat kandidat melamar ke perusahaan via taut
 }
 ```
 
+:::tip Jalur Pendaftaran Alternatif: `POST /login/register-employee`
+Selain `/api/company/apply`, kandidat juga dapat mendaftar melalui `POST /login/register-employee` (modul Login & Auth) dengan menyertakan:
+- `url` (atau `cvUrl` / `cvFileId`): Tautan berkas CV dari Personal Storage.
+- `desc` (atau `bio` / `applicantDesc`): Deskripsi perkenalan diri pelamar.
+
+Data pendaftaran dari kedua endpoint tersebut tersimpan identik ke dokumen `users/{email}` (`role: "candidate"`) dan subkoleksi `companies/{idCompany}/employees/{email}` (`status: "applicant"`).
+:::
+
 ---
 
 ### Endpoint 7: Verifikasi Penerimaan / Penolakan Pelamar (`POST /api/company/verify-employee`)
@@ -549,3 +557,100 @@ class ApplicantModel {
 4. **Handling File CV Pelamar:**
    - Ketika tombol **"Buka CV"** ditekan, buka `applicant.cvUrl` menggunakan plugin `url_launcher` atau tampilkan di in-app PDF viewer (`flutter_pdfview` / `syncfusion_flutter_pdfviewer`).
    - Berikan peringatan jika `applicant.cvUrl` bernilai `null` (*"Pelamar tidak menyertakan berkas CV"*).
+
+---
+
+## 5. Periode Cuti & Arsitektur Efisiensi Biaya API
+
+### Periode `leaveBalance`: Jatah Cuti Tahunan (Per Tahun)
+
+- **Siklus:** `leaveBalance` dihitung secara **Tahunan (Per Tahun / Annual Leave)**, mengikuti standar UU Ketenagakerjaan di Indonesia.
+- **Default:** Setiap karyawan baru yang di-approve otomatis mendapatkan `leaveBalance: 12` (12 hari kerja cuti tahunan).
+- **Pengurangan Saldo:** Setiap kali permohonan cuti disetujui oleh Admin melalui modul perizinan, saldo `leaveBalance` karyawan berkurang sejumlah hari cuti yang diambil.
+- **Top-Up & Koreksi:** Admin HR dapat menyesuaikan atau menambah saldo cuti karyawan kapan saja melalui `PATCH /api/company/employees/:email`.
+
+:::note Perbedaan `leaveBalance` vs `company.leaveQuota`
+- **`leaveBalance` (Per Karyawan):** Saldo cuti tahunan (jatah hari kerja per tahun).
+- **`leaveQuota` (Per Perusahaan):** Batas maksimal pengajuan izin bulanan (cth: izin sakit/keperluan mendadak max 2x sebulan) yang dikonfigurasi di level perusahaan.
+:::
+
+---
+
+### Arsitektur Hemat Biaya: Direct Firestore Read + Backend API Write
+
+Untuk menghindari pemborosan biaya pemanggilan API (*Cloud Functions invocation costs*), menghindari *cold start*, dan mengoptimalkan performa Flutter, arsitektur data dibagi menjadi dua jalur tegas:
+
+```mermaid
+flowchart TD
+    subgraph Flutter["Aplikasi Flutter"]
+        UI["UI Screens & Widgets"]
+    end
+
+    subgraph DirectRead["JALUR BACA (Direct Firestore SDK)"]
+        FS["Firestore Client SDK\n(Stream & Cache Lokal)"]
+    end
+
+    subgraph APIWrite["JALUR TULIS (Backend REST API)"]
+        API["Cloud Functions API\n(/api/company/...)"]
+    end
+
+    subgraph DB["Database & Services"]
+        FStore[("Firestore Database")]
+        Email["Email Notification Service"]
+    end
+
+    UI -->|"READ / LISTEN\n(snapshots / get)"| FS
+    FS -->|"Cache / Offline First\n0 Cloud Functions Cost"| FStore
+
+    UI -->|"WRITE / MUTATION\n(PATCH / POST)"| API
+    API -->|"Validasi Bisnis\nDual-write\nAudit Logging"| FStore
+    API -->|"Kirim Notifikasi"| Email
+```
+
+#### 1. Jalur Baca: Langsung dari Firestore Client SDK (Flutter)
+
+Flutter **tidak perlu memanggil HTTP GET API** untuk membaca data karyawan atau pelamar secara berkala. Cukup gunakan `cloud_firestore` bawaan Flutter:
+
+- **Keuntungan:**
+  - **Zero API Call Cost:** Tidak memakan kuota *Cloud Functions invocation*.
+  - **Real-Time Synchronized:** Menggunakan `.snapshots()` sehingga jika ada data diubah oleh admin lain, tampilan di Flutter langsung ter-update secara reaktif tanpa perlu pull-to-refresh manual.
+  - **Local Offline Cache:** Memanfaatkan cache lokal Firestore, data langsung tampil seketika saat aplikasi dibuka.
+
+##### Contoh Kode Flutter (Real-Time Stream List Karyawan):
+```dart
+Stream<List<EmployeeModel>> streamCompanyEmployees(String companyId) {
+  return FirebaseFirestore.instance
+      .collection('companies')
+      .doc(companyId)
+      .collection('employees')
+      .where('status', isEqualTo: 'active')
+      .snapshots()
+      .map((snapshot) {
+        return snapshot.docs
+            .map((doc) => EmployeeModel.fromJson(doc.data()))
+            .toList();
+      });
+}
+```
+
+#### 2. Jalur Tulis: Wajib Lewat Backend API (Cloud Functions)
+
+Operasi mutasi (tulis/ubah/hapus) **harus tetap memanggil API** karena melibatkan:
+1. **Validasi Bisnis Kompleks:** Mencegah penurunan jabatan Owner atau penghapusan akun pemilik perusahaan.
+2. **Dual-Write Synchronization:** Menjamin data di `companies/{id}/employees/{email}` dan dokumen `users/{email}` tetap sinkron (penting untuk sesi login dan JWT).
+3. **Atomic Quota Increment/Decrement:** Mengubah counter `totalEmployees` perusahaan secara aman dari *race condition*.
+4. **Notifikasi Email:** Memicu pengiriman email konfirmasi penerimaan, penolakan, atau pemecatan secara otomatis.
+
+#### Matriks Penggunaan Jalur Data
+
+| Kebutuhan Fitur | Jalur yang Digunakan | Penjelasan |
+|---|---|---|
+| **Menampilkan List Karyawan** | Firestore Client SDK (`.snapshots()`) | Real-time stream, gratis biaya API function, hemat bandwidth. |
+| **Menampilkan Profil Karyawan** | Firestore Client SDK (`.doc().snapshots()`) | Reaktif terhadap perubahan data. |
+| **Menampilkan Daftar Pelamar** | Firestore Client SDK (`where('status', '==', 'applicant')`) | Pelamar baru langsung muncul di layar admin seketika. |
+| **Update Jabatan / Gaji / Cuti** | **Backend API** (`PATCH /employees/:email`) | Butuh validasi otorisasi, proteksi Owner, dan audit log. |
+| **Nonaktifkan Karyawan (Resign/PHK)** | **Backend API** (`POST /employees/:email/deactivate`) | Melepas `idCompany` user, mengurangi kuota, kirim email. |
+| **Kandidat Melamar Kerja** | **Backend API** (`POST /apply` / `POST /register-employee`) | Butuh verifikasi `idToken`, resolving berkas Personal Storage, kirim email ke Admin. |
+| **Verifikasi Pelamar (Approve/Reject)** | **Backend API** (`POST /verify-employee`) | Dual-write akun, increment kuota pegawai, notifikasi email. |
+| **Download Rekap Kehadiran Excel** | **Backend API** (`GET /arsip/export/kehadiran`) | ExcelJS file streaming langsung ke HTTP response. |
+

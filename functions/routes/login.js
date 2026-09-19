@@ -783,8 +783,19 @@ router.post("/registrasi", async (req, res) => {
 router.post("/register-employee", async (req, res) => {
   try {
     // 1. Ambil data Form & Token dari Body
-    // Kita TIDAK butuh 'email' atau 'username' dari body, karena itu diambil dari Google Token
-    const { idToken, idCompany, noTelp, noWa } = req.body;
+    // Menerima 2 key baru: url (CV) & desc/bio (pengenalan pelamar), dengan fallback alias fleksibel
+    const {
+      idToken,
+      idCompany,
+      noTelp,
+      noWa,
+      url,
+      cvUrl,
+      desc,
+      bio,
+      applicantDesc,
+      cvFileId,
+    } = req.body;
 
     // A. Validasi Input Dasar
     if (!idToken || !idCompany || !noTelp) {
@@ -821,15 +832,16 @@ router.post("/register-employee", async (req, res) => {
     const photoURL = decodedToken.picture || ""; // Ambil foto profil Google
     const uid = decodedToken.uid; // UID dari Firebase Auth
 
-    // 2. Cek Validitas Perusahaan (Sama seperti kodemu sebelumnya)
+    // 2. Cek Validitas Perusahaan
     const companyDoc = await db.collection("companies").doc(idCompany).get();
     if (!companyDoc.exists) {
       return res.status(404).json({ message: "ID Perusahaan tidak ditemukan" });
     }
-    const companyName = companyDoc.data().namaPerusahaan;
+    const companyData = companyDoc.data();
+    const companyName = companyData.namaPerusahaan;
 
     // 3. Cek Status User di Database (Firestore)
-    const userRef = db.collection("users").doc(email); // Bisa pakai doc(uid) atau doc(email) tergantung strukturmu
+    const userRef = db.collection("users").doc(email);
     const userDoc = await userRef.get();
 
     if (userDoc.exists) {
@@ -851,34 +863,129 @@ router.post("/register-employee", async (req, res) => {
       }
     }
 
-    // 4. Simpan / Update Data User
+    // 4. Resolve CV URL & Deskripsi/Bio Pelamar
+    // Mendukung key 'url' / 'cvUrl' / 'cvFileId' dari personal storage dan 'desc' / 'bio' / 'applicantDesc'
+    let finalCvUrl = url || cvUrl || null;
+    const finalDesc = desc || bio || applicantDesc || "";
+
+    // Jika cvFileId dikirim atau 'url' adalah ID dokumen dari personal storage (bukan http url), resolve downloadUrl
+    const storageFileId =
+      cvFileId ||
+      (finalCvUrl &&
+      !finalCvUrl.startsWith("http://") &&
+      !finalCvUrl.startsWith("https://")
+        ? finalCvUrl
+        : null);
+
+    if (storageFileId) {
+      try {
+        const fileSnap = await db
+          .collection("users")
+          .doc(email)
+          .collection("storage")
+          .doc(storageFileId)
+          .get();
+        if (fileSnap.exists && fileSnap.data().downloadUrl) {
+          finalCvUrl = fileSnap.data().downloadUrl;
+        }
+      } catch (err) {
+        console.warn(
+          "[Register-Employee CV Lookup] Gagal membaca file dari user storage:",
+          err.message
+        );
+      }
+    }
+
+    // 5. Simpan / Update Data User di users/{email}
     const userData = {
-      uid: uid, // Simpan UID firebase auth juga
-      username: username, // Dari Google
-      alamatEmail: email, // Dari Google (pasti valid)
-      photoURL: photoURL, // Dari Google
-      noTelp: noTelp, // Dari Form
-      noWa: noWa || noTelp, // Dari Form (jika kosong, samakan dgn noTelp)
+      uid: uid,
+      username: username,
+      alamatEmail: email,
+      photoURL: photoURL,
+      noTelp: noTelp,
+      noWa: noWa || noTelp,
       idCompany: idCompany,
       companyName: companyName,
-      role: "candidate", // Tetap candidate
+      role: "candidate",
       status: "pending_approval",
+      cvUrl: finalCvUrl,
+      applicantDesc: finalDesc,
+      url: finalCvUrl,
+      desc: finalDesc,
+      bio: finalDesc,
       createdAt: Timestamp.now(),
-
-      // Karena login pakai Google, email otomatis verified.
-      // Tapi 'verified' di sini mungkin maksudmu 'verified by company admin'.
-      // Jadi biarkan false atau sesuaikan logika aplikasimu.
-      verified: false, // Saran: True karena email google pasti asli. Tinggal approval admin company.
-      authProvider: getAuthProvider(decodedToken), // Deteksi otomatis: google / apple
+      verified: true, // Google login terverifikasi
+      authProvider: getAuthProvider(decodedToken),
     };
 
-    // Gunakan set({merge: true})
     await userRef.set(userData, { merge: true });
+
+    // 6. Simpan Data Pelamar ke Subcollection companies/{idCompany}/employees (Phase 1 Employee Management Source of Truth)
+    const empApplicantData = {
+      userEmail: email,
+      role: "staff",
+      jabatan: "Pelamar / Applicant",
+      status: "applicant",
+      cvUrl: finalCvUrl,
+      applicantDesc: finalDesc,
+      desc: finalDesc,
+      bio: finalDesc,
+      url: finalCvUrl,
+      appliedAt: Timestamp.now(),
+      joinDate: null,
+      leaveBalance: 12,
+      shiftQuota: 0,
+      config: {},
+      createdAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
+    };
+    await db
+      .collection("companies")
+      .doc(idCompany)
+      .collection("employees")
+      .doc(email)
+      .set(empApplicantData, { merge: true });
+
+    // 7. Log Aktivitas Perusahaan
+    await logCompanyActivity(idCompany, {
+      actorEmail: email,
+      actorName: username,
+      target: idCompany,
+      action: "NEW_APPLICANT",
+      description: `Kandidat ${username} (${email}) mendaftar sebagai pelamar kerja.`,
+    });
+
+    // 8. Kirim Email Notifikasi ke Admin Perusahaan (Non-blocking)
+    const companyAdminEmail = companyData.createdBy;
+    if (companyAdminEmail) {
+      EmailTemplates.send(companyAdminEmail, "new_applicant", {
+        companyName: companyName,
+        applicantName: username,
+        applicantEmail: email,
+        applicantPhone: noTelp,
+        applicantDesc: finalDesc || "-",
+        cvUrl: finalCvUrl || "-",
+      }).catch((err) =>
+        console.error(
+          "[Email Notification] Gagal kirim email new_applicant ke admin:",
+          err.message
+        )
+      );
+    }
 
     return res.status(200).json({
       message: "Pendaftaran berhasil dikirim",
       info: "Silakan hubungi Admin perusahaan untuk konfirmasi akun Anda.",
-      user: { email, username, role: "candidate" }, // Opsional: kembalikan data user
+      user: {
+        email,
+        username,
+        role: "candidate",
+        cvUrl: finalCvUrl,
+        applicantDesc: finalDesc,
+        url: finalCvUrl,
+        desc: finalDesc,
+        bio: finalDesc,
+      },
     });
   } catch (e) {
     console.error("Reg Employee Error:", e);

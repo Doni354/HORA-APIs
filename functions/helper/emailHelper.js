@@ -239,6 +239,20 @@ class EmailTemplates {
                     </div>
                     <p style="font-size: 13px; color: #9ca3af;">File akan diunduh dalam format .xlsx yang dapat dibuka dengan Microsoft Excel atau Google Sheets.</p>
                 `;
+      case "new_applicant":
+        defaultSubject = `Lamaran Baru: ${data.applicantName || username || "Kandidat"} - ${companyName || "Perusahaan"}`;
+        content = `
+                    <h2 style="color: #4f46e5; margin-top: 0;">Lamaran Baru Masuk! 📄</h2>
+                    <p>Ada kandidat baru yang mendaftar ke <b>${companyName || "Perusahaan"}</b>:</p>
+                    <div style="background: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                        <p style="margin: 0 0 8px 0;"><strong>Nama:</strong> ${data.applicantName || username || "-"}</p>
+                        <p style="margin: 0 0 8px 0;"><strong>Email:</strong> ${data.applicantEmail || "-"}</p>
+                        <p style="margin: 0 0 8px 0;"><strong>No. Telepon:</strong> ${data.applicantPhone || "-"}</p>
+                        <p style="margin: 0 0 8px 0;"><strong>Deskripsi / Bio:</strong> ${data.applicantDesc || "-"}</p>
+                        ${data.cvUrl && data.cvUrl !== "-" ? `<p style="margin: 0;"><a href="${data.cvUrl}" target="_blank" style="color: #4f46e5; font-weight: bold; text-decoration: underline;">📄 Lihat Berkas CV</a></p>` : ""}
+                    </div>
+                    <p>Silakan buka panel Recruitment di aplikasi Vorce untuk meninjau dan memproses lamaran ini.</p>
+                `;
         break;
 
       default:

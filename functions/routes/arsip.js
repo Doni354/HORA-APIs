@@ -468,7 +468,7 @@ router.get("/export/kehadiran", async (req, res) => {
       .where("startDate", "<=", endDate)
       .get();
 
-    // 3. Ambil Data Karyawan dari Subcollection untuk Lookup Gaji
+    // 3. Ambil Data Karyawan dari Subcollection untuk Lookup Gaji (Support lookup by email, uid, & nama)
     const empSnapshot = await db
       .collection("companies")
       .doc(idperusahaan)
@@ -478,12 +478,30 @@ router.get("/export/kehadiran", async (req, res) => {
 
     const gajiMap = new Map();
     if (empSnapshot.docs && empSnapshot.docs.length > 0) {
+      // Batch fetch data profil user untuk mendapatkan UID dan Nama lengkap
+      const userRefs = empSnapshot.docs.map((doc) => db.collection("users").doc(doc.id));
+      const userDocs = userRefs.length > 0 ? await db.getAll(...userRefs).catch(() => []) : [];
+      const userMap = new Map();
+      userDocs.forEach((uDoc) => {
+        if (uDoc && uDoc.exists) userMap.set(uDoc.id.toLowerCase(), uDoc.data());
+      });
+
       empSnapshot.docs.forEach((doc) => {
         const d = doc.data();
-        if (d.gaji !== undefined && d.gaji !== null && d.gaji !== 0) {
-          const formatted = `Rp ${Number(d.gaji).toLocaleString("id-ID")}`;
-          gajiMap.set(doc.id.toLowerCase(), formatted);
-          if (d.userEmail) gajiMap.set(d.userEmail.toLowerCase(), formatted);
+        const emailLower = doc.id.toLowerCase();
+        const uData = userMap.get(emailLower) || {};
+        const rawGaji = (d.gaji !== undefined && d.gaji !== null && d.gaji !== 0)
+          ? d.gaji
+          : (uData.gaji !== undefined && uData.gaji !== null ? uData.gaji : 0);
+
+        if (rawGaji && Number(rawGaji) > 0) {
+          const formatted = `Rp ${Number(rawGaji).toLocaleString("id-ID")}`;
+          gajiMap.set(emailLower, formatted);
+          if (d.userEmail) gajiMap.set(String(d.userEmail).toLowerCase(), formatted);
+          if (d.email) gajiMap.set(String(d.email).toLowerCase(), formatted);
+          if (uData.uid) gajiMap.set(String(uData.uid).toLowerCase(), formatted);
+          if (uData.nama) gajiMap.set(String(uData.nama).toLowerCase().trim(), formatted);
+          if (d.nama) gajiMap.set(String(d.nama).toLowerCase().trim(), formatted);
         }
       });
     }
@@ -531,7 +549,8 @@ router.get("/export/kehadiran", async (req, res) => {
       const d = doc.data();
       const nama = d.namaKaryawan || "Tanpa Nama";
       const idKaryawan = d.idKaryawan ? String(d.idKaryawan).toLowerCase() : "";
-      const empGaji = gajiMap.get(idKaryawan) || "-";
+      const namaClean = String(nama).toLowerCase().trim();
+      const empGaji = gajiMap.get(idKaryawan) || gajiMap.get(namaClean) || "-";
 
       if (!employeeData.has(nama)) {
         employeeData.set(nama, { absensi: new Map(), leaves: new Map(), gaji: empGaji });
