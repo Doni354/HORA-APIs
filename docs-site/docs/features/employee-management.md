@@ -64,10 +64,10 @@ graph TD
 
 ### 6. `ApplyCompanyScreen` (Layar Lamaran Kandidat)
 - Form kandidat saat membuka link publik perusahaan (`/apply-company/:idCompany`) atau saat pendaftaran pegawai di awal (`/login/register-employee`).
-- Input deskripsi lamaran (`applicantDesc` / `desc` / `bio`).
+- Input surat pengantar / deskripsi perkenalan pelamar (`description`).
 - **Pemilihan CV:**
-  - Opsi A: Memilih dokumen yang sudah ada dari **Personal Storage** kandidat (`users/{email}/storage`). Kirim `cvFileId` atau `url` (file ID).
-  - Opsi B: Mengirimkan tautan berkas CV langsung (`url` / `cvUrl`).
+  - Opsi A: Memilih dokumen yang sudah ada dari **Personal Storage** kandidat (`users/{email}/storage`). Kirim `attachmentUrl`.
+  - Opsi B: Mengirimkan tautan berkas CV langsung (`attachmentUrl`).
 
 ---
 
@@ -394,8 +394,8 @@ Dipanggil pada `ApplyCompanyScreen` saat kandidat melamar ke perusahaan via taut
 
 :::tip Jalur Pendaftaran Alternatif: `POST /login/register-employee`
 Selain `/api/company/apply`, kandidat juga dapat mendaftar melalui `POST /login/register-employee` (modul Login & Auth) dengan menyertakan:
-- `url` (atau `cvUrl` / `cvFileId`): Tautan berkas CV dari Personal Storage.
-- `desc` (atau `bio` / `applicantDesc`): Deskripsi perkenalan diri pelamar.
+- `attachmentUrl`: Tautan berkas CV dari Personal Storage.
+- `description`: Surat pengantar / deskripsi perkenalan diri pelamar.
 
 Data pendaftaran dari kedua endpoint tersebut tersimpan identik ke dokumen `users/{email}` (`role: "candidate"`) dan subkoleksi `companies/{idCompany}/employees/{email}` (`status: "applicant"`).
 :::
@@ -653,4 +653,62 @@ Operasi mutasi (tulis/ubah/hapus) **harus tetap memanggil API** karena melibatka
 | **Kandidat Melamar Kerja** | **Backend API** (`POST /apply` / `POST /register-employee`) | Butuh verifikasi `idToken`, resolving berkas Personal Storage, kirim email ke Admin. |
 | **Verifikasi Pelamar (Approve/Reject)** | **Backend API** (`POST /verify-employee`) | Dual-write akun, increment kuota pegawai, notifikasi email. |
 | **Download Rekap Kehadiran Excel** | **Backend API** (`GET /arsip/export/kehadiran`) | ExcelJS file streaming langsung ke HTTP response. |
+
+---
+
+## 6. Rangkuman Mekanisme Siklus Hidup Pegawai (ACC, KICK, REFUSE)
+
+Berikut adalah ringkasan arsitektur tata kelola data karyawan (*Employee Lifecycle*) yang menjamin keamanan data dan integritas audit trail:
+
+### Perbandingan Penyimpanan Data: Subkoleksi vs Main Collection
+
+| Kondisi Data | Subkoleksi `companies/{id}/employees/{email}` *(Arsip Internal Perusahaan)* | Main Koleksi `users/{email}` *(Sesi Login Global User)* |
+|---|---|---|
+| **Saat Melamar (Applicant)** | `status: "applicant"`, `appliedAt`, `attachmentUrl`, `description` tersimpan lengkap. | `role: "candidate"`, `status: "pending_approval"`, `idCompany: idCompany`. |
+| **Saat Diterima (ACC)** | `status: "active"`, `joinDate` dicatat permanen, jatah cuti & gaji diinisialisasi. | `role: "staff"`, `status: "active"`, `approvedAt`, `approvedBy`. |
+| **Saat Ditolak (REFUSE)** | **DATA TETAP TERSIMPAN** sebagai riwayat pelamar: `status: "rejected"`, `rejectedAt`, `rejectedBy`. `joinDate` bernilai `null`. | `idCompany: null` *(DILEPAS)*, `role: "rejected"`, `status: "rejected"`. Akun bebas melamar ke tempat lain. |
+| **Saat Dikeluarkan (KICK / Resign / PHK)** | **DATA TETAP TERSIMPAN KEKAL**: `status: "resigned"` \| `"terminated"`, `joinDate` *(waktu masuk)* **TETAP ADA**, `deactivatedAt` *(waktu keluar)* **DICATAT**, `deactivationReason` tersimpan. Seluruh riwayat absensi, cuti, tugas tidak terhapus. | `idCompany: null` *(DILEPAS)*, `role: "rejected"`, `status: "fired"` \| `"resigned"`, `firedAt`, `firedBy`. Akses ke perusahaan dicabut seketika. |
+
+---
+
+### Alur Rinci Tiap Mekanisme
+
+```mermaid
+stateDiagram-v2
+    [*] --> Applicant: POST /apply atau /register-employee
+    Applicant --> ActiveEmployee: ACC (POST /verify-employee { approved: true })
+    Applicant --> RefusedApplicant: REFUSE (POST /verify-employee { approved: false })
+    ActiveEmployee --> OffboardedEmployee: KICK / Offboard (POST /employees/:email/deactivate)
+    RefusedApplicant --> [*]: Bebas Melamar Lagi (idCompany: null)
+    OffboardedEmployee --> [*]: Bebas Melamar Lagi (idCompany: null)
+```
+
+#### 1. Mekanisme ACC (Penerimaan Pelamar)
+- **Endpoint:** `POST /api/company/verify-employee` dengan payload `{ "targetEmail": "...", "approved": true, "role": "staff", "jabatan": "...", "gaji": ... }`
+- **Validasi Kuota:** Memeriksa kuota paket perusahaan (`checkCompanyQuota`). Jika kuota penuh, proses ditolak otomatis.
+- **Eksekusi:**
+  - `companies/{id}/employees/{targetEmail}`: Status menjadi `"active"`, mencatat `joinDate` resmi.
+  - `users/{targetEmail}`: Status menjadi `"active"`, `role: "staff"`, mencatat `approvedAt` dan `approvedBy`.
+  - Counter `totalEmployees` bertambah `+1`.
+  - Mencatat audit log `APPROVE_EMPLOYEE` dan mengirim email selamat bergabung (`employee_approved`).
+
+#### 2. Mekanisme REFUSE (Penolakan Pelamar)
+- **Endpoint:** `POST /api/company/verify-employee` dengan payload `{ "targetEmail": "...", "approved": false }`
+- **Tujuan Arsitektur:** Menolak lamaran tanpa menghapus jejak pelamar bagi perusahaan, namun membebaskan pelamar untuk mendaftar kembali.
+- **Eksekusi:**
+  - `companies/{id}/employees/{targetEmail}`: Dokumen **TETAP DISIMPAN**, status diubah menjadi `"rejected"`, mencatat `rejectedAt` dan `rejectedBy`. `joinDate` tetap `null`.
+  - `users/{targetEmail}`: `idCompany` diubah menjadi `null` (dilepas). Status menjadi `"rejected"`.
+  - Counter `totalEmployees` **tidak berkurang** (karena belum pernah dihitung aktif).
+  - Mencatat audit log `REJECT_EMPLOYEE` dan mengirim email penolakan (`employee_rejected`).
+
+#### 3. Mekanisme KICK / DEACTIVATE (Resign atau PHK)
+- **Endpoint:** `POST /api/company/employees/:email/deactivate` dengan payload `{ "action": "resign" | "terminate", "reason": "..." }`
+- **Proteksi Owner:** Sistem menolak keras penonaktifan pemilik perusahaan (Owner).
+- **Tujuan Arsitektur:** Menjaga keutuhan riwayat legal ketenagakerjaan (*non-destructive*), menjaga data rekap absensi, serta mencabut akses aplikasi.
+- **Eksekusi:**
+  - `companies/{id}/employees/{email}`: Dokumen **TIDAK PERNAH DIHAPUS**. Status menjadi `"resigned"` atau `"terminated"`. `joinDate` **TETAP KELIHATAN**, ditambah atribut `deactivatedAt`, `deactivatedBy`, dan `deactivationReason`.
+  - `users/{email}`: `idCompany` diubah menjadi `null` (dilepas seketika). Sesi login JWT otomatis ditolak saat request berikutnya.
+  - Counter `totalEmployees` berkurang `-1` (slot kuota kembali kosong).
+  - Mencatat audit log `EMPLOYEE_RESIGNED` / `EMPLOYEE_TERMINATED` dan mengirim email notifikasi pemutusan kerja (`employee_fired`).
+
 

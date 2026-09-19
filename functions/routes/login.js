@@ -783,18 +783,13 @@ router.post("/registrasi", async (req, res) => {
 router.post("/register-employee", async (req, res) => {
   try {
     // 1. Ambil data Form & Token dari Body
-    // Menerima 2 key baru: url (CV) & desc/bio (pengenalan pelamar), dengan fallback alias fleksibel
     const {
       idToken,
       idCompany,
       noTelp,
       noWa,
-      url,
-      cvUrl,
-      desc,
-      bio,
-      applicantDesc,
-      cvFileId,
+      attachmentUrl,
+      description,
     } = req.body;
 
     // A. Validasi Input Dasar
@@ -863,38 +858,9 @@ router.post("/register-employee", async (req, res) => {
       }
     }
 
-    // 4. Resolve CV URL & Deskripsi/Bio Pelamar
-    // Mendukung key 'url' / 'cvUrl' / 'cvFileId' dari personal storage dan 'desc' / 'bio' / 'applicantDesc'
-    let finalCvUrl = url || cvUrl || null;
-    const finalDesc = desc || bio || applicantDesc || "";
-
-    // Jika cvFileId dikirim atau 'url' adalah ID dokumen dari personal storage (bukan http url), resolve downloadUrl
-    const storageFileId =
-      cvFileId ||
-      (finalCvUrl &&
-      !finalCvUrl.startsWith("http://") &&
-      !finalCvUrl.startsWith("https://")
-        ? finalCvUrl
-        : null);
-
-    if (storageFileId) {
-      try {
-        const fileSnap = await db
-          .collection("users")
-          .doc(email)
-          .collection("storage")
-          .doc(storageFileId)
-          .get();
-        if (fileSnap.exists && fileSnap.data().downloadUrl) {
-          finalCvUrl = fileSnap.data().downloadUrl;
-        }
-      } catch (err) {
-        console.warn(
-          "[Register-Employee CV Lookup] Gagal membaca file dari user storage:",
-          err.message
-        );
-      }
-    }
+    // 4. CV URL & Deskripsi Pelamar
+    const finalCvUrl = attachmentUrl || null;
+    const finalDesc = description || "";
 
     // 5. Simpan / Update Data User di users/{email}
     const userData = {
@@ -908,11 +874,10 @@ router.post("/register-employee", async (req, res) => {
       companyName: companyName,
       role: "candidate",
       status: "pending_approval",
-      cvUrl: finalCvUrl,
-      applicantDesc: finalDesc,
-      url: finalCvUrl,
-      desc: finalDesc,
-      bio: finalDesc,
+      attachmentUrl: finalCvUrl,
+      description: finalDesc,
+      cvUrl: finalCvUrl, // Kompatibilitas dengan modul Employee Management
+      applicantDesc: finalDesc, // Kompatibilitas dengan modul Employee Management
       createdAt: Timestamp.now(),
       verified: true, // Google login terverifikasi
       authProvider: getAuthProvider(decodedToken),
@@ -926,11 +891,10 @@ router.post("/register-employee", async (req, res) => {
       role: "staff",
       jabatan: "Pelamar / Applicant",
       status: "applicant",
-      cvUrl: finalCvUrl,
-      applicantDesc: finalDesc,
-      desc: finalDesc,
-      bio: finalDesc,
-      url: finalCvUrl,
+      attachmentUrl: finalCvUrl,
+      description: finalDesc,
+      cvUrl: finalCvUrl, // Kompatibilitas dengan modul Employee Management
+      applicantDesc: finalDesc, // Kompatibilitas dengan modul Employee Management
       appliedAt: Timestamp.now(),
       joinDate: null,
       leaveBalance: 12,
@@ -980,11 +944,8 @@ router.post("/register-employee", async (req, res) => {
         email,
         username,
         role: "candidate",
-        cvUrl: finalCvUrl,
-        applicantDesc: finalDesc,
-        url: finalCvUrl,
-        desc: finalDesc,
-        bio: finalDesc,
+        attachmentUrl: finalCvUrl,
+        description: finalDesc,
       },
     });
   } catch (e) {

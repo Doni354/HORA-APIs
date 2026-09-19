@@ -138,7 +138,7 @@ describe("POST /login/register-employee", () => {
     mockCheckPhoneUnique.mockResolvedValue({ isDuplicate: false });
   });
 
-  test("1. Berhasil mendaftar kandidat dengan url CV dan desc", async () => {
+  test("1. Berhasil mendaftar kandidat dengan attachmentUrl dan description", async () => {
     mockVerifyIdToken.mockResolvedValue({
       email: "kandidat1@gmail.com",
       name: "Kandidat Satu",
@@ -154,16 +154,16 @@ describe("POST /login/register-employee", () => {
         idCompany: "COMP_001",
         noTelp: "081234567890",
         noWa: "081234567890",
-        url: "https://cdn.vorce.id/user_storage/UID_GOOGLE_1/cv_kandidat.pdf",
-        desc: "Senior Mobile Engineer dengan pengalaman Flutter 3 tahun.",
+        attachmentUrl: "https://cdn.vorce.id/user_storage/UID_GOOGLE_1/cv_kandidat.pdf",
+        description: "Senior Mobile Engineer dengan pengalaman Flutter 3 tahun.",
       });
 
     expect(res.status).toBe(200);
     expect(res.body.message).toBe("Pendaftaran berhasil dikirim");
-    expect(res.body.user.cvUrl).toBe(
+    expect(res.body.user.attachmentUrl).toBe(
       "https://cdn.vorce.id/user_storage/UID_GOOGLE_1/cv_kandidat.pdf"
     );
-    expect(res.body.user.applicantDesc).toBe(
+    expect(res.body.user.description).toBe(
       "Senior Mobile Engineer dengan pengalaman Flutter 3 tahun."
     );
 
@@ -172,6 +172,12 @@ describe("POST /login/register-employee", () => {
     expect(savedUser).toBeDefined();
     expect(savedUser.role).toBe("candidate");
     expect(savedUser.status).toBe("pending_approval");
+    expect(savedUser.attachmentUrl).toBe(
+      "https://cdn.vorce.id/user_storage/UID_GOOGLE_1/cv_kandidat.pdf"
+    );
+    expect(savedUser.description).toBe(
+      "Senior Mobile Engineer dengan pengalaman Flutter 3 tahun."
+    );
     expect(savedUser.cvUrl).toBe(
       "https://cdn.vorce.id/user_storage/UID_GOOGLE_1/cv_kandidat.pdf"
     );
@@ -184,6 +190,12 @@ describe("POST /login/register-employee", () => {
     expect(savedEmployee).toBeDefined();
     expect(savedEmployee.status).toBe("applicant");
     expect(savedEmployee.jabatan).toBe("Pelamar / Applicant");
+    expect(savedEmployee.attachmentUrl).toBe(
+      "https://cdn.vorce.id/user_storage/UID_GOOGLE_1/cv_kandidat.pdf"
+    );
+    expect(savedEmployee.description).toBe(
+      "Senior Mobile Engineer dengan pengalaman Flutter 3 tahun."
+    );
     expect(savedEmployee.cvUrl).toBe(
       "https://cdn.vorce.id/user_storage/UID_GOOGLE_1/cv_kandidat.pdf"
     );
@@ -212,7 +224,7 @@ describe("POST /login/register-employee", () => {
     );
   });
 
-  test("2. Berhasil mendaftar dengan cvFileId dari Personal Storage dan bio", async () => {
+  test("2. Berhasil mendaftar kandidat tanpa attachmentUrl (opsional)", async () => {
     mockVerifyIdToken.mockResolvedValue({
       email: "kandidat2@gmail.com",
       name: "Kandidat Dua",
@@ -221,35 +233,22 @@ describe("POST /login/register-employee", () => {
       firebase: { sign_in_provider: "google.com" },
     });
 
-    // Simpan file di personal storage mock
-    mockUserStorage["kandidat2@gmail.com"] = {
-      storage_file_999: {
-        fileName: "resume_final.pdf",
-        downloadUrl: "https://cdn.vorce.id/user_storage/UID_GOOGLE_2/resume_final.pdf",
-      },
-    };
-
     const res = await request(app)
       .post("/login/register-employee")
       .send({
         idToken: "VALID_TOKEN_2",
         idCompany: "COMP_001",
         noTelp: "089876543210",
-        cvFileId: "storage_file_999",
-        bio: "Backend Golang/Node.js Developer.",
+        description: "Backend Golang/Node.js Developer.",
       });
 
     expect(res.status).toBe(200);
-    expect(res.body.user.cvUrl).toBe(
-      "https://cdn.vorce.id/user_storage/UID_GOOGLE_2/resume_final.pdf"
-    );
-    expect(res.body.user.applicantDesc).toBe("Backend Golang/Node.js Developer.");
+    expect(res.body.user.attachmentUrl).toBeNull();
+    expect(res.body.user.description).toBe("Backend Golang/Node.js Developer.");
 
     const savedEmp = mockCompanyEmployees["COMP_001"]["kandidat2@gmail.com"];
-    expect(savedEmp.cvUrl).toBe(
-      "https://cdn.vorce.id/user_storage/UID_GOOGLE_2/resume_final.pdf"
-    );
-    expect(savedEmp.applicantDesc).toBe("Backend Golang/Node.js Developer.");
+    expect(savedEmp.attachmentUrl).toBeNull();
+    expect(savedEmp.description).toBe("Backend Golang/Node.js Developer.");
   });
 
   test("3. Menolak pendaftaran jika user sudah menjadi pegawai aktif", async () => {

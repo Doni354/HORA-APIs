@@ -144,34 +144,66 @@ Token dibuat saat login dan berlaku `30d` untuk karyawan, `12h` untuk manajemen 
 
 ## 5. Pendaftaran Kandidat / Calon Pegawai (`/register-employee`)
 
-Digunakan ketika seorang pengguna mendaftar sebagai pelamar/kandidat ke suatu perusahaan tertentu.
+Digunakan ketika seorang pengguna Google mendaftarkan diri secara mandiri sebagai pelamar kerja (kandidat) ke suatu perusahaan.
 
 - **Method & Path:** `POST /login/register-employee`
-- **Auth:** Menggunakan `idToken` Firebase Google Auth di body (tanpa Bearer token di header).
-- **Request Body Payload (JSON):**
+- **Auth:** Menggunakan `idToken` Firebase Google Auth di body (tanpa header Authorization).
+- **Content-Type:** `application/json`
+
+### Request Body Payload (JSON)
 ```json
 {
   "idToken": "eyJhbGciOiJSUzI1NiIs...",
   "idCompany": "C_TEST_01",
   "noTelp": "081234567890",
   "noWa": "081234567890",
-  "url": "https://cdn.vorce.id/user_storage/UID_123/cv_pelamar.pdf",
-  "desc": "Saya adalah Senior Flutter Developer dengan pengalaman 3 tahun di industri fintech."
+  "attachmentUrl": "https://cdn.vorce.id/user_storage/UID_123/1726743900000_cv_budi.pdf",
+  "description": "Halo, saya Budi Santoso. Saya adalah Senior Flutter Developer dengan pengalaman 3 tahun di arsitektur BLoC dan Clean Architecture, tertarik melamar posisi Mobile Engineer."
 }
 ```
 
-### Parameter Penjelasan:
-- **`idToken`** *(wajib)*: Firebase ID Token dari Google Sign-In kandidat.
-- **`idCompany`** *(wajib)*: ID Perusahaan tujuan lamaran.
-- **`noTelp`** *(wajib)*: Nomor telepon kandidat (divalidasi tidak boleh duplikat).
-- **`noWa`** *(opsional)*: Nomor WhatsApp (default: sama dengan `noTelp`).
-- **`url`** *(opsional)*: URL berkas CV dari user yang sudah disimpan di Personal Storage miliknya (juga menerima alias `cvUrl` atau `cvFileId`). Jika dikirimkan berupa ID dokumen berkas (`cvFileId`), sistem otomatis me-resolve `downloadUrl` dari subkoleksi `users/{email}/storage`.
-- **`desc`** *(opsional)*: Deskripsi singkat / bio perkenalan diri pelamar ke perusahaan (juga menerima alias `bio` atau `applicantDesc`).
+### Penjelasan Detail Field Payload:
 
-### Sinkronisasi ke Fitur Employee Management (Recruitment):
-Data pelamar otomatis disimpan secara dual-write:
-1. **Dokumen User (`users/{email}`)**: Tersimpan dengan `role: "candidate"` dan `status: "pending_approval"`.
-2. **Subkoleksi Karyawan Perusahaan (`companies/{idCompany}/employees/{email}`)**: Tersimpan dengan `status: "applicant"` dan `jabatan: "Pelamar / Applicant"`.
-3. **Audit Log & Notifikasi**: Mencatat log aktivitas `NEW_APPLICANT` dan mengirimkan email notifikasi otomatis ke Admin Perusahaan.
-4. **Modul Recruitment**: Muncul otomatis di layar `RecruitmentScreen` admin via `GET /api/company/applicants`.
+| Field | Tipe Data | Status | Keterangan & Aturan |
+|---|---|---|---|
+| **`idToken`** | `string` | **Wajib** | Token kredensial Firebase ID Token yang didapatkan dari proses Google Sign-In di aplikasi Flutter/Client (`GoogleAuthProvider.credential`). Digunakan untuk memverifikasi keaslian akun serta mengekstrak email, nama lengkap, foto profil, dan UID Firebase Auth pelamar. |
+| **`idCompany`** | `string` | **Wajib** | Kode / ID unik perusahaan yang dituju (misal: `C_XYZ123`). ID ini divalidasi ke koleksi `companies`. Jika tidak ditemukan, API mengembalikan `404 Not Found`. |
+| **`noTelp`** | `string` | **Wajib** | Nomor telepon seluler aktif milik pelamar (format string: `08...` atau `+62...`). Divalidasi oleh sistem agar tidak terjadi duplikasi akun dengan nomor telepon yang sama (`409 PHONE_ALREADY_EXISTS`). |
+| **`noWa`** | `string` | *Opsional* | Nomor WhatsApp pelamar untuk komunikasi rekrutmen. Jika tidak diisi / `null`, sistem secara otomatis mengisinya sama dengan nilai `noTelp`. |
+| **`attachmentUrl`** | `string` | *Opsional* | URL file berkas dokumen lamaran / Curriculum Vitae (CV) pelamar yang sudah diunggah dan tersimpan di **Personal Storage** milik pengguna (R2 Storage). URL ini dapat diakses langsung oleh Admin saat me-review berkas pelamar di layar `RecruitmentScreen`. Bernilai `null` jika pelamar belum melampirkan berkas. |
+| **`description`** | `string` | *Opsional* | Surat pengantar / ringkasan bio / teks perkenalan singkat dari pelamar kepada pihak manajemen/HR perusahaan mengenai motivasi, keahlian, atau posisi yang diminati. Default: string kosong `""`. |
+
+---
+
+### Contoh Response Berhasil (HTTP 200 OK)
+```json
+{
+  "message": "Pendaftaran berhasil dikirim",
+  "info": "Silakan hubungi Admin perusahaan untuk konfirmasi akun Anda.",
+  "user": {
+    "email": "budi.santoso@gmail.com",
+    "username": "Budi Santoso",
+    "role": "candidate",
+    "attachmentUrl": "https://cdn.vorce.id/user_storage/UID_123/1726743900000_cv_budi.pdf",
+    "description": "Halo, saya Budi Santoso. Saya adalah Senior Flutter Developer dengan pengalaman 3 tahun di arsitektur BLoC dan Clean Architecture, tertarik melamar posisi Mobile Engineer."
+  }
+}
+```
+
+---
+
+### Alur Integrasi ke Fitur Employee Management:
+Saat endpoint ini dipanggil, backend menjalankan sinkronisasi data secara otomatis:
+1. **Dual-Write User Dokumen (`users/{email}`)**:
+   - Disimpan dengan `role: "candidate"` dan `status: "pending_approval"`.
+   - Menyimpan field `attachmentUrl` dan `description` (serta field kompatibilitas `cvUrl` dan `applicantDesc`).
+2. **Subkoleksi Karyawan Perusahaan (`companies/{idCompany}/employees/{email}`)**:
+   - Disimpan sebagai dokumen pelamar dengan `status: "applicant"` dan `jabatan: "Pelamar / Applicant"`.
+   - Menyimpan `attachmentUrl`, `description`, serta timestamp `appliedAt`.
+   - Data ini **langsung tampil di layar Admin (`RecruitmentScreen`)** melalui `GET /api/company/applicants`.
+3. **Audit Log Perusahaan**:
+   - Mencatat aktivitas `NEW_APPLICANT` ke subkoleksi `companies/{idCompany}/activityLogs`.
+4. **Notifikasi Email Admin**:
+   - Mengirimkan email pemberitahuan ke alamat email pemilik/admin perusahaan (`createdBy`) yang berisi nama pelamar, kontak, isi perkenalan (`description`), dan tautan berkas CV (`attachmentUrl`).
+
 

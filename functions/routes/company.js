@@ -60,7 +60,7 @@ async function checkCompanyQuota(idCompany) {
 // ---------------------------------------------------------
 router.post("/verify-employee", verifyToken, async (req, res) => {
   try {
-    const { targetEmail, approved } = req.body;
+    const { targetEmail, approved, role, jabatan, gaji, leaveBalance, shiftQuota } = req.body;
     const adminData = req.user; // Rename biar ga bentrok sama 'admin' firebase
 
     // 1. Cek Admin
@@ -93,9 +93,9 @@ router.post("/verify-employee", verifyToken, async (req, res) => {
         return res.status(400).json({ message: quotaCheck.message });
       }
 
-      // A. Update DB User
+      // A. Update DB User (Main Collection users/{email})
       await targetRef.update({
-        role: "staff",
+        role: role || "staff",
         status: "active",
         approvedAt: Timestamp.now(),
         approvedBy: adminData.email,
@@ -103,7 +103,11 @@ router.post("/verify-employee", verifyToken, async (req, res) => {
 
       // Sync ke subcollection employees (Phase 1 Source of Truth)
       await employeeService.syncUserToEmployee(adminData.idCompany, targetEmail, {
-        role: "staff",
+        role: role || "staff",
+        jabatan: jabatan || "Staff",
+        gaji: gaji !== undefined ? Number(gaji) : 0,
+        leaveBalance: leaveBalance !== undefined ? Number(leaveBalance) : 12,
+        shiftQuota: shiftQuota !== undefined ? Number(shiftQuota) : 0,
         status: "active",
         joinDate: Timestamp.now(),
       });
@@ -113,7 +117,7 @@ router.post("/verify-employee", verifyToken, async (req, res) => {
         totalEmployees: FieldValue.increment(1),
       });
 
-      // B. Log Aktivitas
+      // C. Log Aktivitas
       await logCompanyActivity(adminData.idCompany, {
         actorEmail: adminData.email,
         actorName: adminData.nama,
@@ -122,7 +126,7 @@ router.post("/verify-employee", verifyToken, async (req, res) => {
         description: `Admin ${adminData.nama} menerima pegawai baru: ${targetData.username}`,
       });
 
-      // C. Kirim Email DITERIMA (via EmailHelper)
+      // D. Kirim Email DITERIMA (via EmailHelper)
       await EmailTemplates.send(targetEmail, "employee_approved", {
         username: targetData.username,
         companyName: targetData.companyName || adminData.companyName || "Perusahaan",
@@ -131,23 +135,28 @@ router.post("/verify-employee", verifyToken, async (req, res) => {
       return res.status(200).json({ message: `Pegawai ${targetEmail} berhasil diterima.` });
 
     } else {
-      // --- KASUS: DITOLAK ---
+      // --- KASUS: DITOLAK (REFUSE) ---
       
-      // A. Update DB User
+      // A. Update DB User - Lepas idCompany dari main collection users agar user bebas melamar ke tempat lain
       await targetRef.update({
         role: "rejected",
         status: "rejected",
         rejectedAt: Timestamp.now(),
         rejectedBy: adminData.email,
+        idCompany: null, // Lepas idCompany untuk keamanan akses
       });
 
-      // Sync ke subcollection employees (status terminated)
-      await employeeService.syncUserToEmployee(adminData.idCompany, targetEmail, {
-        role: "staff",
-        status: "terminated",
-      });
+      // B. Subcollection companies/{idCompany}/employees/{email} TETAP ADA (audit trail riwayat lamaran)
+      const empRef = db.collection("companies").doc(adminData.idCompany).collection("employees").doc(targetEmail);
+      await empRef.set({
+        userEmail: targetEmail,
+        status: "rejected",
+        rejectedAt: Timestamp.now(),
+        rejectedBy: adminData.email,
+        updatedAt: Timestamp.now(),
+      }, { merge: true });
 
-      // B. Log Aktivitas
+      // C. Log Aktivitas
       await logCompanyActivity(adminData.idCompany, {
         actorEmail: adminData.email,
         actorName: adminData.nama,
@@ -156,7 +165,7 @@ router.post("/verify-employee", verifyToken, async (req, res) => {
         description: `Admin ${adminData.nama} menolak lamaran dari: ${targetData.username}`,
       });
 
-      // C. Kirim Email DITOLAK (via EmailHelper)
+      // D. Kirim Email DITOLAK (via EmailHelper)
       await EmailTemplates.send(targetEmail, "employee_rejected", {
         username: targetData.username,
       });
