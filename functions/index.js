@@ -64,6 +64,10 @@ app.options("*", cors());
 app.use("/api/login", loginRoutes);
 app.use("/api/absensi", absensiRoutes);
 app.use("/api/profile", profileRoutes);
+app.use("/api/user-storage", (req, res, next) => {
+  req.url = "/user-storage" + (req.url === "/" ? "" : req.url);
+  profileRoutes(req, res, next);
+});
 app.use("/api/company", companyRoutes);
 app.use("/api/berkas", berkasRoutes);
 app.use("/api/izin", izinRoutes);

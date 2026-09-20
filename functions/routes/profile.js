@@ -991,9 +991,13 @@ router.get("/recover-account", async (req, res) => {
 router.get("/user-storage", verifyToken, async (req, res) => {
   try {
     const email = req.user.email;
-    const snapshot = await db
-      .collection("users")
-      .doc(email)
+    const userRef = db.collection("users").doc(email);
+    const userDoc = await userRef.get();
+    const userData = userDoc.exists ? userDoc.data() : {};
+    const maxStorage = userData.max_storage || 100 * 1024 * 1024;
+    const usedStorage = userData.usedStorage || 0;
+
+    const snapshot = await userRef
       .collection("storage")
       .orderBy("createdAt", "desc")
       .get();
@@ -1003,7 +1007,12 @@ router.get("/user-storage", verifyToken, async (req, res) => {
       files.push({ id: doc.id, ...doc.data() });
     });
 
-    return res.status(200).json({ message: "Success", data: files });
+    return res.status(200).json({
+      message: "Success",
+      usedStorage,
+      maxStorage,
+      data: files,
+    });
   } catch (e) {
     console.error("Get User Storage Error:", e);
     return res.status(500).json({ message: "Server Error", error: e.message });
@@ -1029,11 +1038,30 @@ router.post("/user-storage/valet-key", verifyToken, async (req, res) => {
     // Cek Quota Limit
     const userRef = db.collection("users").doc(email);
     const userDoc = await userRef.get();
-    if (!userDoc.exists) return res.status(404).json({ message: "User tidak ditemukan" });
-    
-    const userData = userDoc.data();
-    const maxStorage = userData.max_storage || (100 * 1024 * 1024); // Default 100MB
-    const usedStorage = userData.usedStorage || 0;
+    let maxStorage = 100 * 1024 * 1024; // Default 100MB
+    let usedStorage = 0;
+
+    if (userDoc.exists) {
+      const userData = userDoc.data();
+      maxStorage = userData.max_storage || 100 * 1024 * 1024;
+      usedStorage = userData.usedStorage || 0;
+    } else {
+      // Auto-initialize jika dokumen belum ada
+      const defaultUserData = {
+        uid: req.user.uid || email,
+        username: req.user.nama || email.split("@")[0],
+        alamatEmail: email,
+        photoURL: "",
+        role: req.user.role || "user",
+        status: "active",
+        idCompany: null,
+        usedStorage: 0,
+        max_storage: maxStorage,
+        createdAt: Timestamp.now(),
+        verified: true,
+      };
+      await userRef.set(defaultUserData, { merge: true });
+    }
     
     // Format Viewable
     const { formatFileSize } = require("../helper/uploadFile");
@@ -1078,8 +1106,13 @@ router.post("/user-storage", verifyToken, async (req, res) => {
       return res.status(400).json({ message: "objectKey dan originalName wajib diisi." });
     }
     
-    const cleanUid = (req.user.uid || email).replace(/[^a-zA-Z0-9]/g, "");
-    if (!objectKey.startsWith(`user_storage/${cleanUid}/`)) {
+    const cleanUid = (req.user.uid || "").replace(/[^a-zA-Z0-9]/g, "");
+    const cleanEmail = email.replace(/[^a-zA-Z0-9]/g, "");
+    const isValidPrefix =
+      (cleanUid && objectKey.startsWith(`user_storage/${cleanUid}/`)) ||
+      objectKey.startsWith(`user_storage/${cleanEmail}/`);
+
+    if (!isValidPrefix) {
       return res.status(403).json({ message: "objectKey tidak valid untuk user ini." });
     }
 
@@ -1098,14 +1131,37 @@ router.post("/user-storage", verifyToken, async (req, res) => {
 
     await db.runTransaction(async (t) => {
       const userSnap = await t.get(userRef);
-      if (!userSnap.exists) throw new Error("USER_NOT_FOUND");
+      let maxStorage = 100 * 1024 * 1024;
+      let usedStorage = 0;
       
-      const userData = userSnap.data();
-      const maxStorage = userData.max_storage || (100 * 1024 * 1024);
-      const usedStorage = userData.usedStorage || 0;
-      
-      if (usedStorage + realContentLength > maxStorage) {
-        throw new Error("QUOTA_EXCEEDED");
+      if (!userSnap.exists) {
+        t.set(
+          userRef,
+          {
+            email: email,
+            alamatEmail: email,
+            uid: req.user.uid || email,
+            username: req.user.nama || email.split("@")[0],
+            role: req.user.role || "user",
+            status: "active",
+            idCompany: null,
+            usedStorage: realContentLength,
+            max_storage: maxStorage,
+            createdAt: Timestamp.now(),
+            verified: true,
+          },
+          { merge: true }
+        );
+      } else {
+        const userData = userSnap.data();
+        maxStorage = userData.max_storage || (100 * 1024 * 1024);
+        usedStorage = userData.usedStorage || 0;
+
+        if (usedStorage + realContentLength > maxStorage) {
+          throw new Error("QUOTA_EXCEEDED");
+        }
+
+        t.update(userRef, { usedStorage: FieldValue.increment(realContentLength) });
       }
 
       newDocRef = userRef.collection("storage").doc();
@@ -1121,7 +1177,6 @@ router.post("/user-storage", verifyToken, async (req, res) => {
       };
 
       t.set(newDocRef, fileData);
-      t.update(userRef, { usedStorage: FieldValue.increment(realContentLength) });
     });
 
     return res.status(201).json({
@@ -1156,9 +1211,13 @@ router.delete("/user-storage/:fileId", verifyToken, async (req, res) => {
       fileData = docSnap.data();
 
       t.delete(docRef);
-      t.update(userRef, {
-        usedStorage: FieldValue.increment(-(fileData.sizeBytes || 0)),
-      });
+      t.set(
+        userRef,
+        {
+          usedStorage: FieldValue.increment(-(fileData.sizeBytes || 0)),
+        },
+        { merge: true }
+      );
     });
 
     if (fileData && fileData.storagePath) {

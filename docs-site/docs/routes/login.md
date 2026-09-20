@@ -196,6 +196,7 @@ Digunakan ketika seorang pengguna Google mendaftarkan diri secara mandiri sebaga
 Saat endpoint ini dipanggil, backend menjalankan sinkronisasi data secara otomatis:
 1. **Dual-Write User Dokumen (`users/{email}`)**:
    - Disimpan dengan `role: "candidate"` dan `status: "pending_approval"`.
+   - Menggunakan `{ merge: true }`, sehingga data Personal Storage pengguna (`usedStorage`, `max_storage`, dan subkoleksi `storage/`) tetap utuh dan tersimpan aman.
    - Menyimpan field `attachmentUrl` dan `description` (serta field kompatibilitas `cvUrl` dan `applicantDesc`).
 2. **Subkoleksi Karyawan Perusahaan (`companies/{idCompany}/employees/{email}`)**:
    - Disimpan sebagai dokumen pelamar dengan `status: "applicant"` dan `jabatan: "Pelamar / Applicant"`.
@@ -205,5 +206,19 @@ Saat endpoint ini dipanggil, backend menjalankan sinkronisasi data secara otomat
    - Mencatat aktivitas `NEW_APPLICANT` ke subkoleksi `companies/{idCompany}/activityLogs`.
 4. **Notifikasi Email Admin**:
    - Mengirimkan email pemberitahuan ke alamat email pemilik/admin perusahaan (`createdBy`) yang berisi nama pelamar, kontak, isi perkenalan (`description`), dan tautan berkas CV (`attachmentUrl`).
+
+---
+
+### Alur Frontend: Unggah CV ke Personal Storage Sebelum Registrasi
+
+Sebelum memanggil endpoint `/register-employee`, aplikasi mobile (Flutter) menjalankan alur berikut:
+1. **Google Sign-In**: Pengguna masuk via akun Google di gawai dan mendapatkan `idToken` Firebase Auth (`FirebaseAuth.instance.currentUser.getIdToken()`).
+2. **Unggah Berkas ke Personal Storage**:
+   - Panggil `POST /api/user-storage/valet-key` dengan header `Authorization: Bearer <idToken>` dan payload `{ fileName, mimeType, fileSize }`.
+   - Unggah berkas biner (CV/Portofolio) langsung ke `uploadUrl` (Cloudflare R2).
+   - Panggil `POST /api/user-storage` dengan header `Authorization: Bearer <idToken>` untuk konfirmasi metadata dan memperoleh `downloadUrl`.
+3. **Kirim Pendaftaran**:
+   - Panggil `POST /login/register-employee` dengan menyertakan `attachmentUrl: downloadUrl` dan `description` pelamar.
+
 
 
