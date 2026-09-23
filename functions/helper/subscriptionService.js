@@ -144,4 +144,58 @@ async function recalculateLimits(companyId) {
   );
 }
 
-module.exports = { resolveBenefits, mapSubscriptionState, isActiveState, recalculateLimits };
+// Default Personal Storage Quota (100MB)
+const BASE_USER_STORAGE = 104857600;
+
+// ──────────────────────────────────────────────
+// recalculateUserStorageLimits
+// ──────────────────────────────────────────────
+/**
+ * Hitung ulang max_storage untuk akun personal user berdasarkan subscription personal yang aktif.
+ *
+ * Formula:
+ *   max_storage = BASE_USER_STORAGE + totalActiveAddedStorage
+ *
+ * Fungsi ini IDEMPOTENT — aman dipanggil berulang kali.
+ * @param {string} userEmail
+ * @returns {Promise<number>}
+ */
+async function recalculateUserStorageLimits(userEmail) {
+  const activeSubs = await db
+    .collection("users")
+    .doc(userEmail)
+    .collection("subscriptions")
+    .where("status", "in", ["active", "grace_period"])
+    .get();
+
+  let addedStorageTotal = 0;
+
+  activeSubs.forEach((doc) => {
+    const data = doc.data();
+    if (data.productType === "personal_storage" || data.type === "personal_storage") {
+      addedStorageTotal += data.addedStorage || 0;
+    }
+  });
+
+  const finalMaxStorage = BASE_USER_STORAGE + addedStorageTotal;
+
+  await db.collection("users").doc(userEmail).set({
+    max_storage: finalMaxStorage,
+  }, { merge: true });
+
+  console.log(
+    `[SubscriptionService] Recalculated personal storage for ${userEmail}: ` +
+      `max_storage=${finalMaxStorage} (added=${addedStorageTotal})`
+  );
+
+  return finalMaxStorage;
+}
+
+module.exports = {
+  resolveBenefits,
+  mapSubscriptionState,
+  isActiveState,
+  recalculateLimits,
+  recalculateUserStorageLimits,
+  BASE_USER_STORAGE,
+};

@@ -14,14 +14,14 @@ const { Timestamp } = require("firebase-admin/firestore");
 const { db } = require("../config/firebase");
 const { PRODUCT_BENEFITS } = require("../config/products");
 const { verifySubscription, acknowledgeSubscription } = require("../helper/playstore");
-const { resolveBenefits, mapSubscriptionState, isActiveState, recalculateLimits } = require("../helper/subscriptionService");
+const { resolveBenefits, mapSubscriptionState, isActiveState, recalculateLimits, recalculateUserStorageLimits } = require("../helper/subscriptionService");
 
 /**
  * Verifikasi dan aktivasi subscription Google Play.
  *
  * @param {string} purchaseToken  - Token dari Google Play
- * @param {string} productId      - e.g. "vorce_basic"
- * @param {object} user           - req.user dari JWT middleware
+ * @param {string} productId      - e.g. "vorce_basic" atau "vorce_personal_storage_1"
+ * @param {object} user           - req.user dari token middleware
  *   { email, role, idCompany }
  *
  * @returns {{ ok: true, data: object } | { ok: false, status: number, message: string }}
@@ -33,13 +33,17 @@ async function verifyGooglePlayPurchase(purchaseToken, productId, user) {
     return { ok: false, status: 400, message: `Product '${productId}' tidak dikenali.` };
   }
 
-  // ─── B. CEK COMPANY ───
+  const isPersonalStorage = productConfig.type === "personal_storage";
+
+  // ─── B. CEK COMPANY (HANYA UNTUK COMPANY SUBSCRIPTIONS) ───
   const companyId = user.idCompany;
-  if (!companyId) {
-    return { ok: false, status: 403, message: "Anda belum terdaftar di perusahaan manapun." };
-  }
-  if (user.role !== "admin") {
-    return { ok: false, status: 403, message: "Hanya Admin yang bisa membeli subscription." };
+  if (!isPersonalStorage) {
+    if (!companyId) {
+      return { ok: false, status: 403, message: "Anda belum terdaftar di perusahaan manapun." };
+    }
+    if (user.role !== "admin") {
+      return { ok: false, status: 403, message: "Hanya Admin yang bisa membeli subscription perusahaan." };
+    }
   }
 
   // ─── C. FRAUD CHECK: TOKEN REUSE ───
@@ -80,10 +84,11 @@ async function verifyGooglePlayPurchase(purchaseToken, productId, user) {
 
   // ─── FRAUD CHECK: ORDER ID REUSE ───
   if (orderId) {
-    const existingOrder = await db
-      .collection("companies").doc(companyId)
-      .collection("subscriptions")
-      .where("orderId", "==", orderId).limit(1).get();
+    const existingOrderQuery = isPersonalStorage
+      ? db.collection("users").doc(user.email).collection("subscriptions").where("orderId", "==", orderId).limit(1)
+      : db.collection("companies").doc(companyId).collection("subscriptions").where("orderId", "==", orderId).limit(1);
+
+    const existingOrder = await existingOrderQuery.get();
     if (!existingOrder.empty) {
       return { ok: false, status: 409, message: "Order ini sudah pernah diproses." };
     }
@@ -116,19 +121,35 @@ async function verifyGooglePlayPurchase(purchaseToken, productId, user) {
   };
 
   const batch = db.batch();
-  batch.set(
-    db.collection("companies").doc(companyId).collection("subscriptions").doc(subscriptionId),
-    subscriptionDoc
-  );
-  batch.set(db.collection("subscription_tokens").doc(purchaseToken), {
-    companyId, subscriptionId, productId, createdAt: now,
-  });
+
+  if (isPersonalStorage) {
+    batch.set(
+      db.collection("users").doc(user.email).collection("subscriptions").doc(subscriptionId),
+      subscriptionDoc
+    );
+    batch.set(db.collection("subscription_tokens").doc(purchaseToken), {
+      userEmail: user.email, subscriptionId, productId, type: "personal_storage", createdAt: now,
+    });
+  } else {
+    batch.set(
+      db.collection("companies").doc(companyId).collection("subscriptions").doc(subscriptionId),
+      subscriptionDoc
+    );
+    batch.set(db.collection("subscription_tokens").doc(purchaseToken), {
+      companyId, subscriptionId, productId, createdAt: now,
+    });
+  }
+
   await batch.commit();
 
   // ─── I. RECALCULATE LIMITS ───
-  await recalculateLimits(companyId);
-
-  console.log(`[GooglePlayService] ✅ Activated: ${productId} for ${companyId} by ${user.email}`);
+  if (isPersonalStorage) {
+    await recalculateUserStorageLimits(user.email);
+    console.log(`[GooglePlayService] ✅ Activated Personal Storage: ${productId} for ${user.email}`);
+  } else {
+    await recalculateLimits(companyId);
+    console.log(`[GooglePlayService] ✅ Activated Company Sub: ${productId} for ${companyId} by ${user.email}`);
+  }
 
   return {
     ok: true,

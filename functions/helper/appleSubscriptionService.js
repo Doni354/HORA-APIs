@@ -14,7 +14,7 @@ const { Timestamp } = require("firebase-admin/firestore");
 const { db } = require("../config/firebase");
 const { PRODUCT_BENEFITS } = require("../config/products");
 const appleHelper = require("../helper/applestore");
-const { resolveBenefits, isActiveState, recalculateLimits } = require("../helper/subscriptionService");
+const { resolveBenefits, isActiveState, recalculateLimits, recalculateUserStorageLimits } = require("../helper/subscriptionService");
 
 // ──────────────────────────────────────────────
 // verifyApplePurchase
@@ -23,8 +23,8 @@ const { resolveBenefits, isActiveState, recalculateLimits } = require("../helper
  * Verifikasi dan aktivasi subscription Apple.
  *
  * @param {string} transactionId - Transaction ID dari StoreKit
- * @param {string} productId     - e.g. "vorce_basic_month"
- * @param {object} user          - req.user dari JWT middleware { email, role, idCompany }
+ * @param {string} productId     - e.g. "vorce_basic_month" atau "vorce_personal_storage_1_month"
+ * @param {object} user          - req.user dari token middleware { email, role, idCompany }
  *
  * @returns {{ ok: true, data: object } | { ok: false, status: number, message: string }}
  */
@@ -35,13 +35,17 @@ async function verifyApplePurchase(transactionId, productId, user) {
     return { ok: false, status: 400, message: `Product '${productId}' tidak dikenali.` };
   }
 
-  // ─── B. CEK COMPANY ───
+  const isPersonalStorage = productConfig.type === "personal_storage";
+
+  // ─── B. CEK COMPANY (HANYA UNTUK COMPANY SUBSCRIPTIONS) ───
   const companyId = user.idCompany;
-  if (!companyId) {
-    return { ok: false, status: 403, message: "Anda belum terdaftar di perusahaan manapun." };
-  }
-  if (user.role !== "admin") {
-    return { ok: false, status: 403, message: "Hanya Admin yang bisa membeli subscription." };
+  if (!isPersonalStorage) {
+    if (!companyId) {
+      return { ok: false, status: 403, message: "Anda belum terdaftar di perusahaan manapun." };
+    }
+    if (user.role !== "admin") {
+      return { ok: false, status: 403, message: "Hanya Admin yang bisa membeli subscription perusahaan." };
+    }
   }
 
   // ─── C. FRAUD CHECK: TRANSACTION ID REUSE ───
@@ -72,13 +76,19 @@ async function verifyApplePurchase(transactionId, productId, user) {
   const bundleId              = transactionData.bundleId;
 
   // Cegah subscription sama didaftarkan 2x
-  const existingAppleSub = await db
-    .collection("companies").doc(companyId)
-    .collection("subscriptions")
-    .where("originalTransactionId", "==", originalTransactionId)
-    .where("platform", "==", "apple")
-    .where("status", "in", ["active", "grace_period"])
-    .limit(1).get();
+  const existingSubQuery = isPersonalStorage
+    ? db.collection("users").doc(user.email).collection("subscriptions")
+        .where("originalTransactionId", "==", originalTransactionId)
+        .where("platform", "==", "apple")
+        .where("status", "in", ["active", "grace_period"])
+        .limit(1)
+    : db.collection("companies").doc(companyId).collection("subscriptions")
+        .where("originalTransactionId", "==", originalTransactionId)
+        .where("platform", "==", "apple")
+        .where("status", "in", ["active", "grace_period"])
+        .limit(1);
+
+  const existingAppleSub = await existingSubQuery.get();
   if (!existingAppleSub.empty) {
     return { ok: false, status: 409, message: "Transaksi ini sudah pernah diproses." };
   }
@@ -113,28 +123,47 @@ async function verifyApplePurchase(transactionId, productId, user) {
   const now            = Timestamp.now();
   const subscriptionId = `${productId}_apple_${Date.now()}`;
 
+  const subDocData = {
+    productId, productType: benefits.type, billingPeriod: benefits.billingPeriod,
+    transactionId, originalTransactionId, status: "active", platform: "apple",
+    startedAt: now, expiresAt: expiryTime ? Timestamp.fromDate(expiryTime) : null,
+    lastRenewedAt: now, cancelledAt: null, autoRenewing: true,
+    addedStorage: benefits.addedStorage, addedKaryawan: benefits.addedKaryawan,
+    maxDevices: benefits.maxDevices, purchasedBy: user.email, createdAt: now,
+  };
+
   const batch = db.batch();
-  batch.set(
-    db.collection("companies").doc(companyId).collection("subscriptions").doc(subscriptionId),
-    {
-      productId, productType: benefits.type, billingPeriod: benefits.billingPeriod,
-      transactionId, originalTransactionId, status: "active", platform: "apple",
-      startedAt: now, expiresAt: expiryTime ? Timestamp.fromDate(expiryTime) : null,
-      lastRenewedAt: now, cancelledAt: null, autoRenewing: true,
-      addedStorage: benefits.addedStorage, addedKaryawan: benefits.addedKaryawan,
-      maxDevices: benefits.maxDevices, purchasedBy: user.email, createdAt: now,
-    }
-  );
-  batch.set(
-    db.collection("subscription_tokens").doc(`apple_${transactionId}`),
-    { companyId, subscriptionId, productId, platform: "apple", originalTransactionId, createdAt: now }
-  );
+
+  if (isPersonalStorage) {
+    batch.set(
+      db.collection("users").doc(user.email).collection("subscriptions").doc(subscriptionId),
+      subDocData
+    );
+    batch.set(
+      db.collection("subscription_tokens").doc(`apple_${transactionId}`),
+      { userEmail: user.email, subscriptionId, productId, platform: "apple", type: "personal_storage", originalTransactionId, createdAt: now }
+    );
+  } else {
+    batch.set(
+      db.collection("companies").doc(companyId).collection("subscriptions").doc(subscriptionId),
+      subDocData
+    );
+    batch.set(
+      db.collection("subscription_tokens").doc(`apple_${transactionId}`),
+      { companyId, subscriptionId, productId, platform: "apple", originalTransactionId, createdAt: now }
+    );
+  }
+
   await batch.commit();
 
   // ─── G. RECALCULATE LIMITS ───
-  await recalculateLimits(companyId);
-
-  console.log(`[AppleSubscriptionService] ✅ Activated: ${productId} for ${companyId} by ${user.email}`);
+  if (isPersonalStorage) {
+    await recalculateUserStorageLimits(user.email);
+    console.log(`[AppleSubscriptionService] ✅ Activated Personal Storage: ${productId} for ${user.email}`);
+  } else {
+    await recalculateLimits(companyId);
+    console.log(`[AppleSubscriptionService] ✅ Activated Company Sub: ${productId} for ${companyId} by ${user.email}`);
+  }
 
   return {
     ok: true,
@@ -202,7 +231,8 @@ async function handleAppleWebhook(signedPayload) {
     return { ok: true, message: "Transaction not tracked, acknowledged" };
   }
 
-  const { companyId, subscriptionId: subDocId } = tokensQuery.docs[0].data();
+  const tokenData = tokensQuery.docs[0].data();
+  const { companyId, userEmail, subscriptionId: subDocId } = tokenData;
 
   // ─── E. UPDATE STATUS ───
   const action     = appleHelper.getNotificationAction(notificationType);
@@ -250,19 +280,28 @@ async function handleAppleWebhook(signedPayload) {
       console.log(`[AppleSubscriptionService] Unhandled action: ${action} for type: ${notificationType}`);
   }
 
-  const subRef = db.collection("companies").doc(companyId).collection("subscriptions").doc(subDocId);
-  const subDoc = await subRef.get();
-  if (!subDoc.exists) {
-    console.warn(`[AppleSubscriptionService] Sub doc ${subDocId} not found under ${companyId}`);
-    return { ok: true, message: "Subscription doc not found" };
+  if (userEmail) {
+    const subRef = db.collection("users").doc(userEmail).collection("subscriptions").doc(subDocId);
+    const subDoc = await subRef.get();
+    if (!subDoc.exists) {
+      console.warn(`[AppleSubscriptionService] Sub doc ${subDocId} not found under user ${userEmail}`);
+      return { ok: true, message: "Subscription doc not found" };
+    }
+    await subRef.update(updateData);
+    await recalculateUserStorageLimits(userEmail);
+    console.log(`[AppleSubscriptionService] ✅ Updated user personal storage ${subDocId} for ${userEmail} → action: ${action}`);
+  } else if (companyId) {
+    const subRef = db.collection("companies").doc(companyId).collection("subscriptions").doc(subDocId);
+    const subDoc = await subRef.get();
+    if (!subDoc.exists) {
+      console.warn(`[AppleSubscriptionService] Sub doc ${subDocId} not found under company ${companyId}`);
+      return { ok: true, message: "Subscription doc not found" };
+    }
+    await subRef.update(updateData);
+    await recalculateLimits(companyId);
+    console.log(`[AppleSubscriptionService] ✅ Updated company sub ${subDocId} for ${companyId} → action: ${action}`);
   }
 
-  await subRef.update(updateData);
-
-  // ─── F. RECALCULATE LIMITS ───
-  await recalculateLimits(companyId);
-
-  console.log(`[AppleSubscriptionService] ✅ Updated ${subDocId} → action: ${action}`);
   return { ok: true, message: "OK" };
 }
 

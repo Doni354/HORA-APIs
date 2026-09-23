@@ -105,6 +105,23 @@ const PRODUCT_BENEFITS = {
   vorce_storage_4_month:  { name: "Storage Addon 250GB", type: "addon", monthly: { addedStorage: 268435456000,  addedKaryawan: 0 } },
   vorce_storage_4_year:   { name: "Storage Addon 250GB", type: "addon", yearly:  { addedStorage: 3221225472000, addedKaryawan: 0 } },
 
+  // ── PERSONAL STORAGE (USER STORAGE) — Google Play ──
+  vorce_personal_storage_1: {
+    name: "User Storage 10GB", type: "personal_storage",
+    monthly: { addedStorage: 10737418240,   addedKaryawan: 0 },   // 10 GB
+    yearly:  { addedStorage: 128849018880,  addedKaryawan: 0 },   // 120 GB
+  },
+  vorce_personal_storage_2: {
+    name: "User Storage 20GB", type: "personal_storage",
+    monthly: { addedStorage: 21474836480,   addedKaryawan: 0 },   // 20 GB
+    yearly:  { addedStorage: 257698037760,  addedKaryawan: 0 },   // 240 GB
+  },
+  vorce_personal_storage_3: {
+    name: "User Storage 30GB", type: "personal_storage",
+    monthly: { addedStorage: 32212254720,   addedKaryawan: 0 },   // 30 GB
+    yearly:  { addedStorage: 386547056640,  addedKaryawan: 0 },   // 360 GB
+  },
+
   // ── VELINKED PLANS — Apple ──
   velinked_pro_max_month:  { name: "Velinked Pro Max",  type: "velinked", monthly: { addedStorage: 0, addedKaryawan: 0, maxDevices: 13 } },
   velinked_pro_max_year:   { name: "Velinked Pro Max",  type: "velinked", yearly:  { addedStorage: 0, addedKaryawan: 0, maxDevices: 13 } },
@@ -112,6 +129,14 @@ const PRODUCT_BENEFITS = {
   velinked_pro_plus_year:  { name: "Velinked Pro Plus", type: "velinked", yearly:  { addedStorage: 0, addedKaryawan: 0, maxDevices: 5  } },
   velinked_pro_month:      { name: "Velinked Pro",      type: "velinked", monthly: { addedStorage: 0, addedKaryawan: 0, maxDevices: 3  } },
   velinked_pro_year:       { name: "Velinked Pro",      type: "velinked", yearly:  { addedStorage: 0, addedKaryawan: 0, maxDevices: 3  } },
+
+  // ── PERSONAL STORAGE (USER STORAGE) — Apple ──
+  vorce_personal_storage_1_month: { name: "User Storage 10GB", type: "personal_storage", monthly: { addedStorage: 10737418240,   addedKaryawan: 0 } },
+  vorce_personal_storage_1_year:  { name: "User Storage 10GB", type: "personal_storage", yearly:  { addedStorage: 128849018880,  addedKaryawan: 0 } },
+  vorce_personal_storage_2_month: { name: "User Storage 20GB", type: "personal_storage", monthly: { addedStorage: 21474836480,   addedKaryawan: 0 } },
+  vorce_personal_storage_2_year:  { name: "User Storage 20GB", type: "personal_storage", yearly:  { addedStorage: 257698037760,  addedKaryawan: 0 } },
+  vorce_personal_storage_3_month: { name: "User Storage 30GB", type: "personal_storage", monthly: { addedStorage: 32212254720,   addedKaryawan: 0 } },
+  vorce_personal_storage_3_year:  { name: "User Storage 30GB", type: "personal_storage", yearly:  { addedStorage: 386547056640,  addedKaryawan: 0 } },
 };
 
 // ──────────────────────────────────────────────

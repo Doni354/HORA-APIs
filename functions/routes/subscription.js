@@ -19,7 +19,7 @@ const express = require("express");
 const { db } = require("../config/firebase");
 const { verifyToken } = require("../middleware/token");
 const { BASE_MAX_STORAGE } = require("../helper/playstore");
-const { isActiveState } = require("../helper/subscriptionService");
+const { isActiveState, BASE_USER_STORAGE } = require("../helper/subscriptionService");
 const { verifyGooglePlayPurchase } = require("../helper/googlePlayService");
 const { verifyApplePurchase, handleAppleWebhook } = require("../helper/appleSubscriptionService");
 const { processIAPPurchase } = require("../helper/iapService");
@@ -51,18 +51,54 @@ router.post("/verify", verifyToken, async (req, res) => {
 });
 
 // ==================================================================
-// 2. STATUS SUBSCRIPTION
+// 2. STATUS SUBSCRIPTION (Company / Personal)
 // ==================================================================
 /**
  * GET /api/subscription/status
- * Response: { subscriptions, totalAddedStorage, baseLimits }
+ * Query: ?type=personal (opsional)
+ * Response: { subscriptions, totalAddedStorage, baseLimits, currentMaxStorage }
  */
 router.get("/status", verifyToken, async (req, res) => {
   try {
-    const companyId = req.user.idCompany;
-    if (!companyId) {
-      return res.status(403).json({ message: "Anda belum terdaftar di perusahaan manapun." });
+    const type = req.query.type;
+    // Jika requested personal atau user belum punya company, return status personal storage
+    if (type === "personal" || !req.user.idCompany) {
+      const email = req.user.email;
+      const subsSnapshot = await db
+        .collection("users").doc(email)
+        .collection("subscriptions")
+        .orderBy("createdAt", "desc").get();
+
+      const subscriptions = [];
+      let totalAddedStorage = 0;
+
+      subsSnapshot.forEach((doc) => {
+        const data = doc.data();
+        subscriptions.push({
+          id: doc.id,
+          productId: data.productId,
+          productType: data.productType || "personal_storage",
+          billingPeriod: data.billingPeriod || null,
+          status: data.status,
+          autoRenewing: data.autoRenewing,
+          expiresAt: data.expiresAt?.toDate?.()?.toISOString() || null,
+          addedStorage: data.addedStorage,
+          startedAt: data.startedAt?.toDate?.()?.toISOString() || null,
+        });
+
+        if (isActiveState(data.status)) totalAddedStorage += data.addedStorage || 0;
+      });
+
+      return res.status(200).json({
+        type: "personal",
+        subscriptions,
+        totalAddedStorage,
+        baseLimits: { maxStorage: BASE_USER_STORAGE },
+        currentMaxStorage: BASE_USER_STORAGE + totalAddedStorage,
+      });
     }
+
+    const companyId = req.user.idCompany;
 
     const subsSnapshot = await db
       .collection("companies").doc(companyId)
@@ -91,12 +127,60 @@ router.get("/status", verifyToken, async (req, res) => {
     });
 
     return res.status(200).json({
+      type: "company",
       subscriptions,
       totalAddedStorage,
       baseLimits: { maxStorage: BASE_MAX_STORAGE },
     });
   } catch (e) {
     console.error("[Route/status] Error:", e);
+    return res.status(500).json({ message: "Server Error" });
+  }
+});
+
+// ==================================================================
+// 2B. STATUS PERSONAL SUBSCRIPTION (Dedicated Endpoint)
+// ==================================================================
+/**
+ * GET /api/subscription/personal-status
+ * Response: { subscriptions, totalAddedStorage, baseLimits, currentMaxStorage }
+ */
+router.get("/personal-status", verifyToken, async (req, res) => {
+  try {
+    const email = req.user.email;
+    const subsSnapshot = await db
+      .collection("users").doc(email)
+      .collection("subscriptions")
+      .orderBy("createdAt", "desc").get();
+
+    const subscriptions = [];
+    let totalAddedStorage = 0;
+
+    subsSnapshot.forEach((doc) => {
+      const data = doc.data();
+      subscriptions.push({
+        id: doc.id,
+        productId: data.productId,
+        productType: data.productType || "personal_storage",
+        billingPeriod: data.billingPeriod || null,
+        status: data.status,
+        autoRenewing: data.autoRenewing,
+        expiresAt: data.expiresAt?.toDate?.()?.toISOString() || null,
+        addedStorage: data.addedStorage,
+        startedAt: data.startedAt?.toDate?.()?.toISOString() || null,
+      });
+
+      if (isActiveState(data.status)) totalAddedStorage += data.addedStorage || 0;
+    });
+
+    return res.status(200).json({
+      subscriptions,
+      totalAddedStorage,
+      baseLimits: { maxStorage: BASE_USER_STORAGE },
+      currentMaxStorage: BASE_USER_STORAGE + totalAddedStorage,
+    });
+  } catch (e) {
+    console.error("[Route/personal-status] Error:", e);
     return res.status(500).json({ message: "Server Error" });
   }
 });

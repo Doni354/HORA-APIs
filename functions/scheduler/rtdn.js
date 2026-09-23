@@ -56,6 +56,7 @@ const {
   BASE_MAX_STORAGE,
   BASE_MAX_DEVICES,
 } = require("../helper/playstore");
+const { recalculateUserStorageLimits } = require("../helper/subscriptionService");
 
 // ──────────────────────────────────────────────
 // HELPERS (sama dengan yang di subscription.js)
@@ -211,7 +212,7 @@ const notifRTDN = onMessagePublished(
       return;
     }
 
-    const { companyId, subscriptionId: subDocId } = tokenDoc.data();
+    const { companyId, userEmail, subscriptionId: subDocId } = tokenDoc.data();
 
     // ─── D. RE-VERIFY KE GOOGLE PLAY ───
     // Jangan percaya notificationType saja — selalu re-verify ke Google Play
@@ -265,28 +266,49 @@ const notifRTDN = onMessagePublished(
     }
 
     // Update subscription document
-    const subRef = db
-      .collection("companies")
-      .doc(companyId)
-      .collection("subscriptions")
-      .doc(subDocId);
+    if (userEmail) {
+      const subRef = db
+        .collection("users")
+        .doc(userEmail)
+        .collection("subscriptions")
+        .doc(subDocId);
 
-    const subDoc = await subRef.get();
-    if (!subDoc.exists) {
-      console.warn(
-        `[RTDN] Subscription doc ${subDocId} not found in company ${companyId}`
+      const subDoc = await subRef.get();
+      if (!subDoc.exists) {
+        console.warn(
+          `[RTDN] Subscription doc ${subDocId} not found in user ${userEmail}`
+        );
+        return;
+      }
+
+      await subRef.update(updateData);
+      await recalculateUserStorageLimits(userEmail);
+
+      console.log(
+        `[RTDN] ✅ Updated user personal storage ${subDocId} for ${userEmail} → status: ${newStatus} (type: ${notificationType})`
       );
-      return;
+    } else if (companyId) {
+      const subRef = db
+        .collection("companies")
+        .doc(companyId)
+        .collection("subscriptions")
+        .doc(subDocId);
+
+      const subDoc = await subRef.get();
+      if (!subDoc.exists) {
+        console.warn(
+          `[RTDN] Subscription doc ${subDocId} not found in company ${companyId}`
+        );
+        return;
+      }
+
+      await subRef.update(updateData);
+      await recalculateLimits(companyId);
+
+      console.log(
+        `[RTDN] ✅ Updated company ${subDocId} → status: ${newStatus} (type: ${notificationType})`
+      );
     }
-
-    await subRef.update(updateData);
-
-    // ─── F. RECALCULATE LIMITS ───
-    await recalculateLimits(companyId);
-
-    console.log(
-      `[RTDN] ✅ Updated ${subDocId} → status: ${newStatus} (type: ${notificationType})`
-    );
   }
 );
 

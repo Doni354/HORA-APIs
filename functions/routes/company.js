@@ -683,7 +683,7 @@ router.post("/send-invite", verifyToken, async (req, res) => {
       });
   
       // F. Kirim Email (via EmailHelper)
-      const inviteLink = `https://hora-7394b.web.app/join/?code=${inviteCode}`;
+      const inviteLink = `https://vorce.id/invite?id=${adminData.idCompany}&inviteToken=${inviteCode}&invited=true`;
       
       await EmailTemplates.send(targetEmail, "invite", {
         companyName: companyName,
@@ -698,6 +698,53 @@ router.post("/send-invite", verifyToken, async (req, res) => {
       console.error("Send Invite Error:", e);
       return res.status(500).json({ message: "Server Error" });
     }
+});
+
+// ---------------------------------------------------------
+// 2. VERIFY INVITE TOKEN (Public - Tanpa Auth)
+// ---------------------------------------------------------
+// Endpoint untuk FE Mobile validasi token undangan sebelum user signup
+router.get("/verify-invite/:inviteToken", async (req, res) => {
+  try {
+    const { inviteToken } = req.params;
+
+    if (!inviteToken) {
+      return res.status(400).json({ valid: false, message: "Token undangan tidak diberikan." });
+    }
+
+    const inviteRef = db.collection("invitations").doc(inviteToken);
+    const inviteDoc = await inviteRef.get();
+
+    if (!inviteDoc.exists) {
+      return res.status(404).json({ valid: false, message: "Kode undangan tidak valid." });
+    }
+
+    const inviteData = inviteDoc.data();
+
+    // Cek apakah sudah expired
+    if (inviteData.expiresAt.toMillis() < Date.now()) {
+      return res.status(400).json({ valid: false, message: "Undangan sudah kadaluarsa." });
+    }
+
+    // Ambil logo perusahaan dari company doc
+    let companyLogo = "";
+    const companyDoc = await db.collection("companies").doc(inviteData.idCompany).get();
+    if (companyDoc.exists) {
+      companyLogo = companyDoc.data().logoUrl || "";
+    }
+
+    return res.status(200).json({
+      valid: true,
+      email: inviteData.email,
+      companyName: inviteData.companyName,
+      companyLogo: companyLogo,
+      inviterName: inviteData.invitedBy || "Admin",
+    });
+
+  } catch (e) {
+    console.error("Verify Invite Error:", e);
+    return res.status(500).json({ valid: false, message: "Server Error" });
+  }
 });
 
 // ---------------------------------------------------------
