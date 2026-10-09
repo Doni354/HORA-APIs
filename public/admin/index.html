@@ -194,6 +194,14 @@
             </div>
             <div class="flex gap-3 w-full sm:w-auto">
               <button
+                onclick="App.rekap.openModal()"
+                class="flex-1 sm:flex-none justify-center inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-semibold rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none transition-all gap-2"
+                title="Rekap Pendaftar Pemilik (Owner)"
+              >
+                <i class="fa-solid fa-file-invoice"></i>
+                Rekap Pendaftar
+              </button>
+              <button
                 onclick="App.company.loadAll()"
                 class="flex-1 sm:flex-none justify-center inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50 focus:outline-none transition-all gap-2"
               >
@@ -807,6 +815,169 @@
               class="px-6 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-200 flex items-center gap-2"
             >
               <i class="fa-regular fa-paper-plane"></i> Kirim Email
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL REKAP PENDAFTAR PEMILIK -->
+    <div
+      id="modal-rekap"
+      class="fixed inset-0 z-50 hidden overflow-y-auto"
+      aria-labelledby="modal-rekap-title"
+      role="dialog"
+      aria-modal="true"
+    >
+      <div
+        class="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0"
+      >
+        <div
+          class="fixed inset-0 bg-gray-900 bg-opacity-75 transition-opacity backdrop-blur-sm"
+          onclick="App.ui.closeModal('modal-rekap')"
+        ></div>
+        <div
+          class="inline-block align-bottom bg-white rounded-2xl text-left overflow-hidden shadow-2xl transform transition-all sm:my-8 sm:align-middle sm:max-w-4xl w-full"
+        >
+          <!-- Header -->
+          <div class="bg-white px-6 py-4 border-b border-gray-100 flex justify-between items-center">
+            <div class="flex items-center gap-3">
+              <div class="h-10 w-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center text-lg border border-indigo-100">
+                <i class="fa-solid fa-file-invoice"></i>
+              </div>
+              <div>
+                <h3 class="text-lg font-bold text-gray-900" id="modal-rekap-title">
+                  Rekap Pendaftar Pemilik Perusahaan
+                </h3>
+                <p class="text-xs text-gray-500">
+                  Data akun yang terdaftar sebagai admin/pemilik per bulan untuk showcase & pelaporan
+                </p>
+              </div>
+            </div>
+            <button
+              onclick="App.ui.closeModal('modal-rekap')"
+              class="text-gray-400 hover:text-gray-600 p-2 rounded-lg hover:bg-gray-100"
+            >
+              <i class="fa-solid fa-xmark text-xl"></i>
+            </button>
+          </div>
+
+          <!-- Filter & Action Controls -->
+          <div class="bg-gray-50 px-6 py-4 border-b border-gray-100 flex flex-wrap gap-4 items-center justify-between">
+            <!-- Filter Bulan & Tahun -->
+            <div class="flex flex-wrap items-center gap-3">
+              <div class="flex items-center gap-2">
+                <label for="rekap-bulan" class="text-xs font-bold text-gray-500 uppercase">Periode:</label>
+                <select
+                  id="rekap-bulan"
+                  onchange="App.rekap.loadData()"
+                  class="border border-gray-300 rounded-lg text-sm px-3 py-1.5 bg-white focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 shadow-sm font-medium"
+                >
+                  <option value="all">⭐ 1 Tahun Penuh (Tahunan)</option>
+                  <option value="1">Januari</option>
+                  <option value="2">Februari</option>
+                  <option value="3">Maret</option>
+                  <option value="4">April</option>
+                  <option value="5">Mei</option>
+                  <option value="6">Juni</option>
+                  <option value="7">Juli</option>
+                  <option value="8">Agustus</option>
+                  <option value="9" selected>September</option>
+                  <option value="10">Oktober</option>
+                  <option value="11">November</option>
+                  <option value="12">Desember</option>
+                </select>
+              </div>
+
+              <div class="flex items-center gap-2">
+                <label for="rekap-tahun" class="text-xs font-bold text-gray-500 uppercase">Tahun:</label>
+                <select
+                  id="rekap-tahun"
+                  onchange="App.rekap.loadData()"
+                  class="border border-gray-300 rounded-lg text-sm px-3 py-1.5 bg-white focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 shadow-sm font-medium"
+                >
+                  <option value="2024">2024</option>
+                  <option value="2025">2025</option>
+                  <option value="2026" selected>2026</option>
+                  <option value="2027">2027</option>
+                </select>
+              </div>
+
+              <span
+                id="rekap-count-badge"
+                class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-indigo-100 text-indigo-700"
+              >
+                0 Terdaftar
+              </span>
+            </div>
+
+            <!-- Export Buttons -->
+            <div class="flex flex-wrap items-center gap-2">
+              <button
+                onclick="App.rekap.copyText()"
+                class="inline-flex items-center px-3 py-1.5 border border-gray-300 rounded-lg text-xs font-semibold text-gray-700 bg-white hover:bg-gray-50 shadow-sm gap-1.5 transition-all"
+                title="Salin teks rapi untuk dikirim lewat chat WhatsApp"
+              >
+                <i class="fa-regular fa-copy text-indigo-600"></i>
+                Salin Format Teks
+              </button>
+              <button
+                onclick="App.rekap.downloadTxt()"
+                class="inline-flex items-center px-3 py-1.5 border border-gray-300 rounded-lg text-xs font-semibold text-gray-700 bg-white hover:bg-gray-50 shadow-sm gap-1.5 transition-all"
+                title="Download file .txt"
+              >
+                <i class="fa-regular fa-file-lines text-amber-600"></i>
+                Download .TXT
+              </button>
+              <button
+                onclick="App.rekap.downloadDoc()"
+                class="inline-flex items-center px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 rounded-lg text-xs font-semibold text-white shadow-sm gap-1.5 transition-all"
+                title="Download dokumen Microsoft Word (.doc) rapi untuk showcase"
+              >
+                <i class="fa-regular fa-file-word"></i>
+                Download .DOC (Word)
+              </button>
+            </div>
+          </div>
+
+          <!-- Table Container -->
+          <div class="p-6 max-h-[60vh] overflow-y-auto">
+            <div class="border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+              <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50/80">
+                  <tr>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider w-12">No</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Tgl Daftar</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Nama Pemilik</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Email Pemilik</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Kontak (HP/WA)</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Perusahaan</th>
+                    <th class="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
+                  </tr>
+                </thead>
+                <tbody id="rekap-table-body" class="bg-white divide-y divide-gray-200 text-sm">
+                  <!-- Injected via JS -->
+                </tbody>
+              </table>
+              <div id="rekap-loading" class="p-8 text-center text-gray-500 hidden">
+                <i class="fa-solid fa-spinner fa-spin text-indigo-600 text-xl mb-2"></i>
+                <p class="text-xs">Memuat data pendaftar...</p>
+              </div>
+              <div id="rekap-empty" class="p-8 text-center text-gray-400 hidden">
+                <i class="fa-regular fa-folder-open text-3xl text-gray-300 mb-2 block"></i>
+                Tidak ada pendaftar pemilik pada periode ini.
+              </div>
+            </div>
+          </div>
+
+          <!-- Footer -->
+          <div class="bg-gray-50 px-6 py-3 border-t border-gray-100 flex justify-between items-center text-xs text-gray-500">
+            <span>💡 <i>Klik tombol ekspor di atas untuk langsung mengirim ke Marco atau diunduh sebagai laporan.</i></span>
+            <button
+              onclick="App.ui.closeModal('modal-rekap')"
+              class="px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50"
+            >
+              Tutup
             </button>
           </div>
         </div>
@@ -1755,6 +1926,302 @@
         }
       }
 
+      // --- REKAP SERVICE (FITUR SHOWCASE MARCO) ---
+      class RekapService {
+        constructor() {
+          this.rekapData = [];
+        }
+
+        async openModal() {
+          const now = new Date();
+          const curMonth = (now.getMonth() + 1).toString();
+          const curYear = now.getFullYear().toString();
+
+          const bulanSelect = document.getElementById("rekap-bulan");
+          const tahunSelect = document.getElementById("rekap-tahun");
+
+          if (bulanSelect && !bulanSelect.value) bulanSelect.value = curMonth;
+          if (tahunSelect && !tahunSelect.value) tahunSelect.value = curYear;
+
+          App.ui.openModal("modal-rekap");
+
+          // Pastikan data company sudah terload
+          if (!App.company.data || App.company.data.length === 0) {
+            await App.company.loadAll();
+          }
+
+          await this.loadData();
+        }
+
+        async loadData() {
+          const bulanSelect = document.getElementById("rekap-bulan");
+          const tahunSelect = document.getElementById("rekap-tahun");
+          const tbody = document.getElementById("rekap-table-body");
+          const loading = document.getElementById("rekap-loading");
+          const empty = document.getElementById("rekap-empty");
+          const badge = document.getElementById("rekap-count-badge");
+
+          const isYearly = bulanSelect.value === "all";
+          const selectedMonth = isYearly ? null : parseInt(bulanSelect.value);
+          const selectedYear = parseInt(tahunSelect.value);
+
+          tbody.innerHTML = "";
+          empty.classList.add("hidden");
+          loading.classList.remove("hidden");
+
+          try {
+            // Filter company yang dibuat di bulan & tahun terpilih
+            const matchedCompanies = (App.company.data || []).filter((c) => {
+              if (!c.createdAt) return false;
+              const date = c.createdAt.toDate
+                ? c.createdAt.toDate()
+                : c.createdAt.seconds
+                ? new Date(c.createdAt.seconds * 1000)
+                : new Date(c.createdAt);
+              if (isNaN(date.getTime())) return false;
+              
+              const matchYear = date.getFullYear() === selectedYear;
+              if (!matchYear) return false;
+
+              if (isYearly) return true;
+              return date.getMonth() + 1 === selectedMonth;
+            });
+
+            // Ambil detail pendaftar (users) untuk tiap company
+            this.rekapData = [];
+            for (const c of matchedCompanies) {
+              const ownerEmail = c.createdBy || "-";
+              let ownerName = "Pemilik";
+              let noTelp = "-";
+              let noWA = "-";
+              let userStatus = "active";
+
+              if (ownerEmail && ownerEmail !== "-") {
+                try {
+                  const userSnap = await getDoc(doc(db, "users", ownerEmail));
+                  if (userSnap.exists()) {
+                    const u = userSnap.data();
+                    ownerName = u.namaLengkap || u.username || ownerName;
+                    noTelp = u.noTelp || "-";
+                    noWA = u.noWA || u.noTelp || "-";
+                    userStatus = u.status || userStatus;
+                  }
+                } catch (err) {
+                  console.warn("Gagal fetch user", ownerEmail, err);
+                }
+              }
+
+              const date = c.createdAt.toDate
+                ? c.createdAt.toDate()
+                : c.createdAt.seconds
+                ? new Date(c.createdAt.seconds * 1000)
+                : new Date(c.createdAt);
+
+              this.rekapData.push({
+                companyId: c.idCompany || c.id,
+                companyName: c.namaPerusahaan || "Tanpa Nama",
+                ownerEmail: ownerEmail,
+                ownerName: ownerName,
+                noTelp: noTelp,
+                noWA: noWA,
+                status: userStatus,
+                date: date,
+                dateFormatted: date.toLocaleString("id-ID", {
+                  dateStyle: "medium",
+                  timeStyle: "short",
+                }),
+              });
+            }
+
+            // Urutkan dari tanggal terbaru
+            this.rekapData.sort((a, b) => b.date - a.date);
+
+            badge.textContent = isYearly
+              ? `${this.rekapData.length} Terdaftar (Tahun ${selectedYear})`
+              : `${this.rekapData.length} Terdaftar`;
+
+            loading.classList.add("hidden");
+
+            if (this.rekapData.length === 0) {
+              empty.classList.remove("hidden");
+              return;
+            }
+
+            this.rekapData.forEach((item, index) => {
+              const statusBadge =
+                item.status === "active"
+                  ? `<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">Aktif</span>`
+                  : `<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">${item.status}</span>`;
+
+              tbody.innerHTML += `
+                <tr class="hover:bg-gray-50 transition-colors">
+                  <td class="px-4 py-3 text-gray-500 font-mono text-xs">${index + 1}</td>
+                  <td class="px-4 py-3 whitespace-nowrap text-xs text-gray-600">${item.dateFormatted}</td>
+                  <td class="px-4 py-3 font-semibold text-gray-900">${item.ownerName}</td>
+                  <td class="px-4 py-3 text-xs text-indigo-600 font-mono">${item.ownerEmail}</td>
+                  <td class="px-4 py-3 text-xs text-gray-600">${item.noTelp !== "-" ? item.noTelp : item.noWA}</td>
+                  <td class="px-4 py-3">
+                    <div class="font-medium text-gray-900">${item.companyName}</div>
+                    <div class="text-[10px] text-gray-400 font-mono">${item.companyId}</div>
+                  </td>
+                  <td class="px-4 py-3 text-center">${statusBadge}</td>
+                </tr>
+              `;
+            });
+          } catch (e) {
+            console.error("Gagal load data rekap:", e);
+            loading.classList.add("hidden");
+            App.ui.showToast("Gagal memuat rekap: " + e.message, "error");
+          }
+        }
+
+        generateText() {
+          const isYearly = document.getElementById("rekap-bulan").value === "all";
+          const bulanName = document.getElementById("rekap-bulan").selectedOptions[0].text;
+          const tahun = document.getElementById("rekap-tahun").value;
+          const periodeLabel = isYearly ? `Tahun ${tahun} (1 Tahun Penuh)` : `${bulanName} ${tahun}`;
+
+          let txt = `========================================\n`;
+          txt += `REKAP PENDAFTAR PEMILIK PERUSAHAAN (VORCE)\n`;
+          txt += `Periode : ${periodeLabel}\n`;
+          txt += `Total   : ${this.rekapData.length} Pendaftar\n`;
+          txt += `========================================\n\n`;
+
+          if (this.rekapData.length === 0) {
+            txt += `(Tidak ada pendaftaran pemilik pada periode ini)\n`;
+          } else {
+            this.rekapData.forEach((item, idx) => {
+              txt += `${idx + 1}. NAMA PEMILIK : ${item.ownerName}\n`;
+              txt += `   EMAIL        : ${item.ownerEmail}\n`;
+              txt += `   NO HP / WA   : ${item.noTelp !== "-" ? item.noTelp : item.noWA}\n`;
+              txt += `   PERUSAHAAN   : ${item.companyName} (ID: ${item.companyId})\n`;
+              txt += `   TGL DAFTAR   : ${item.dateFormatted}\n`;
+              txt += `   STATUS       : ${item.status}\n`;
+              txt += `----------------------------------------\n`;
+            });
+          }
+
+          txt += `\nDi-generate via Vorce Admin Panel pada: ${new Date().toLocaleString("id-ID")}\n`;
+          return txt;
+        }
+
+        async copyText() {
+          if (!this.rekapData || this.rekapData.length === 0) {
+            return App.ui.showToast("Tidak ada data untuk disalin", "info");
+          }
+          const txt = this.generateText();
+          try {
+            await navigator.clipboard.writeText(txt);
+            App.ui.showToast("Format teks berhasil disalin ke clipboard!", "success");
+          } catch (err) {
+            App.ui.showToast("Gagal menyalin teks: " + err.message, "error");
+          }
+        }
+
+        downloadTxt() {
+          if (!this.rekapData || this.rekapData.length === 0) {
+            return App.ui.showToast("Tidak ada data untuk diunduh", "info");
+          }
+          const isYearly = document.getElementById("rekap-bulan").value === "all";
+          const bulan = document.getElementById("rekap-bulan").value;
+          const tahun = document.getElementById("rekap-tahun").value;
+          const txt = this.generateText();
+
+          const blob = new Blob([txt], { type: "text/plain;charset=utf-8" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = isYearly
+            ? `rekap_pendaftar_pemilik_tahun_${tahun}.txt`
+            : `rekap_pendaftar_pemilik_${bulan.padStart(2, "0")}_${tahun}.txt`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          App.ui.showToast("File .TXT berhasil diunduh!", "success");
+        }
+
+        downloadDoc() {
+          if (!this.rekapData || this.rekapData.length === 0) {
+            return App.ui.showToast("Tidak ada data untuk diunduh", "info");
+          }
+          const isYearly = document.getElementById("rekap-bulan").value === "all";
+          const bulan = document.getElementById("rekap-bulan").value;
+          const bulanName = document.getElementById("rekap-bulan").selectedOptions[0].text;
+          const tahun = document.getElementById("rekap-tahun").value;
+          const periodeLabel = isYearly ? `Tahun ${tahun} (1 Tahun Penuh)` : `${bulanName} ${tahun}`;
+
+          let rows = "";
+          this.rekapData.forEach((item, idx) => {
+            rows += `
+              <tr style="border-bottom: 1px solid #ddd;">
+                <td style="padding: 8px; text-align: center;">${idx + 1}</td>
+                <td style="padding: 8px;">${item.dateFormatted}</td>
+                <td style="padding: 8px; font-weight: bold;">${item.ownerName}</td>
+                <td style="padding: 8px; color: #4f46e5;">${item.ownerEmail}</td>
+                <td style="padding: 8px;">${item.noTelp !== "-" ? item.noTelp : item.noWA}</td>
+                <td style="padding: 8px;">${item.companyName} (${item.companyId})</td>
+                <td style="padding: 8px; text-align: center;">${item.status}</td>
+              </tr>
+            `;
+          });
+
+          const docContent = `
+            <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+            <head>
+              <meta charset='utf-8'>
+              <title>Rekap Pendaftar Pemilik</title>
+              <style>
+                body { font-family: 'Segoe UI', Arial, sans-serif; color: #333; margin: 30px; }
+                h1 { color: #4f46e5; margin-bottom: 5px; }
+                p { margin: 2px 0 15px 0; color: #666; font-size: 14px; }
+                table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 13px; }
+                th { background-color: #4f46e5; color: white; padding: 10px 8px; text-align: left; }
+                td { padding: 8px; }
+                .footer { margin-top: 30px; font-size: 11px; color: #888; border-top: 1px solid #eee; padding-top: 10px; }
+              </style>
+            </head>
+            <body>
+              <h1>REKAP PENDAFTAR PEMILIK PERUSAHAAN (VORCE)</h1>
+              <p><b>Periode:</b> ${periodeLabel} &nbsp;|&nbsp; <b>Total:</b> ${this.rekapData.length} Pendaftar</p>
+              <table border="1" style="border-collapse: collapse; border: 1px solid #ccc;">
+                <thead>
+                  <tr style="background-color: #4f46e5; color: white;">
+                    <th style="padding: 8px; text-align: center;">No</th>
+                    <th style="padding: 8px;">Tgl Daftar</th>
+                    <th style="padding: 8px;">Nama Pemilik</th>
+                    <th style="padding: 8px;">Email Pemilik</th>
+                    <th style="padding: 8px;">Kontak HP/WA</th>
+                    <th style="padding: 8px;">Perusahaan</th>
+                    <th style="padding: 8px; text-align: center;">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${rows}
+                </tbody>
+              </table>
+              <div class="footer">
+                Dicetak dari Vorce Super Admin Panel pada ${new Date().toLocaleString("id-ID")}
+              </div>
+            </body>
+            </html>
+          `;
+
+          const blob = new Blob(['\ufeff', docContent], { type: "application/msword" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = isYearly
+            ? `rekap_pendaftar_pemilik_tahun_${tahun}.doc`
+            : `rekap_pendaftar_pemilik_${bulan.padStart(2, "0")}_${tahun}.doc`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          App.ui.showToast("File .DOC (Word) berhasil diunduh!", "success");
+        }
+      }
+
       // --- APP ENTRY POINT ---
       const App = {
         auth: new AuthService(),
@@ -1764,6 +2231,7 @@
         admin: new AdminManager(),
         email: new EmailService(),
         settings: new SettingsManager(),
+        rekap: new RekapService(),
       };
 
       // Expose to window for onclick handlers
